@@ -2171,17 +2171,22 @@ class MessageRouter:
     @staticmethod
     def _submission_prompt_text(prompt: SubmissionPrompt) -> str:
         format_hints = {
-            SubmissionKind.TEXT: "Пришли текст одним сообщением.",
-            SubmissionKind.FILE: "Прикрепи один файл.",
-            SubmissionKind.PHOTO: "Пришли одну фотографию.",
-            SubmissionKind.VIDEO: "Пришли видеофайл или видеосообщение.",
-            SubmissionKind.ANY: "Пришли текст, файл, фотографию или видео.",
+            SubmissionKind.TEXT: "Текстовый ответ одним сообщением или ссылка на Notion.",
+            SubmissionKind.FILE: "Один файл с выполненной работой.",
+            SubmissionKind.PHOTO: "Одна фотография с выполненной работой.",
+            SubmissionKind.VIDEO: "Видеофайл или видеосообщение.",
+            SubmissionKind.ANY: (
+                "Текст, ссылка на Notion, файл, фотография или видео."
+            ),
         }
         return (
             "📤 <b>СДАЧА ДОМАШНЕГО ЗАДАНИЯ</b>\n\n"
-            f"📘 Урок {prompt.lesson_position}: {escape(prompt.lesson_title)}\n\n"
-            f"📝 {escape(prompt.instructions)}\n\n"
-            f"{format_hints[prompt.submission_kind]}\n"
+            f"📘 <b>Урок {prompt.lesson_position}: {escape(prompt.lesson_title)}</b>\n\n"
+            "📝 <b>Что нужно сделать:</b>\n"
+            f"{escape(prompt.instructions)}\n\n"
+            "📎 <b>Как отправить ответ:</b>\n"
+            f"{format_hints[prompt.submission_kind]}\n\n"
+            "Можно прислать ссылку на Notion, если работа оформлена там.\n"
             "Для отмены используй /cancel."
         )
 
