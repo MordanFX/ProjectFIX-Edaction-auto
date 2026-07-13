@@ -1,0 +1,581 @@
+"""Minimal Discord Gateway application for Project FIX commands."""
+
+import asyncio
+import json
+import logging
+import platform
+from datetime import datetime
+from typing import Any
+
+from websockets.asyncio.client import connect
+
+from course_platform.discord.api import DiscordAPIClient
+from course_platform.discord.homework import DiscordHomeworkManager
+from course_platform.discord.setup import ProjectFixServerSetup
+from course_platform.services.discord_homework import DiscordHomeworkService
+from course_platform.services.discord_lesson_deliveries import DiscordLessonDeliveryService
+from course_platform.services.discord_notifications import DiscordFeedbackNotificationService
+from course_platform.services.discord_participants import DiscordParticipantService
+from course_platform.services.discord_questions import (
+    DiscordQuestionAccessError,
+    DiscordQuestionService,
+)
+from course_platform.services.discord_submissions import (
+    DiscordIncomingAttachment,
+    DiscordMessageAlreadySubmittedError,
+    DiscordSubmissionAccessError,
+    DiscordSubmissionService,
+)
+from course_platform.services.submissions import (
+    AssignmentAcceptedError,
+    EmptySubmissionError,
+    NoActiveAssignmentError,
+    SubmissionPendingError,
+    UnsupportedSubmissionKindError,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class DiscordApplication:
+    def __init__(
+        self,
+        api: DiscordAPIClient,
+        token: str,
+        guild_id: int,
+        homework_service: DiscordHomeworkService,
+        participant_service: DiscordParticipantService,
+        submission_service: DiscordSubmissionService | None = None,
+        *,
+        message_content_enabled: bool = False,
+        feedback_service: DiscordFeedbackNotificationService | None = None,
+        lesson_delivery_service: DiscordLessonDeliveryService | None = None,
+        question_service: DiscordQuestionService | None = None,
+        homework_channel_id: int | None = None,
+        staff_role_id: int | None = None,
+    ) -> None:
+        self._api = api
+        self._token = token
+        self._guild_id = guild_id
+        self._homework_service = homework_service
+        self._participant_service = participant_service
+        self._submission_service = submission_service
+        self._message_content_enabled = message_content_enabled
+        self._feedback_service = feedback_service
+        self._lesson_delivery_service = lesson_delivery_service
+        self._question_service = question_service
+        self._homework_channel_id = homework_channel_id
+        self._staff_role_id = staff_role_id
+        self._homework_manager: DiscordHomeworkManager | None = None
+        self._bot_user_id: int | None = None
+        self._sequence: int | None = None
+
+    async def run(self) -> None:
+        bot = await self._api.current_user()
+        application_id = int(bot["id"])
+        self._bot_user_id = application_id
+        self._homework_manager = DiscordHomeworkManager(
+            self._api,
+            self._homework_service,
+            bot_user_id=application_id,
+            homework_channel_id=self._homework_channel_id,
+        )
+        await self._api.guild(self._guild_id)
+        await self._api.register_guild_commands(
+            application_id,
+            self._guild_id,
+            [
+                {
+                    "name": "setup_project_fix",
+                    "description": "Создать базовую структуру сервера Project FIX",
+                    "type": 1,
+                    "default_member_permissions": str(1 << 5),
+                },
+                {
+                    "name": "homework",
+                    "description": "Открыть личное пространство для домашних работ",
+                    "type": 1,
+                },
+            ],
+        )
+        gateway = await self._api.gateway_url()
+        logger.info("Discord bot @%s connected to configured guild", bot["username"])
+        async with connect(f"{gateway}?v=10&encoding=json") as websocket:
+            hello = json.loads(await websocket.recv())
+            heartbeat_interval = hello["d"]["heartbeat_interval"] / 1000
+            heartbeat = asyncio.create_task(self._heartbeat(websocket, heartbeat_interval))
+            feedback_dispatcher = asyncio.create_task(self._dispatch_feedback_forever())
+            lesson_dispatcher = asyncio.create_task(self._dispatch_lessons_forever())
+            try:
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "op": 2,
+                            "d": {
+                                "token": self._token,
+                                "intents": (
+                                    1 | (1 << 9) | (1 << 15) if self._message_content_enabled else 1
+                                ),
+                                "properties": {
+                                    "os": platform.system().lower(),
+                                    "browser": "course-platform",
+                                    "device": "course-platform",
+                                },
+                            },
+                        }
+                    )
+                )
+                async for raw in websocket:
+                    payload = json.loads(raw)
+                    if payload.get("s") is not None:
+                        self._sequence = payload["s"]
+                    if payload.get("op") == 7:
+                        raise RuntimeError("Discord requested reconnect")
+                    if payload.get("op") == 0 and payload.get("t") == "READY":
+                        logger.info("Discord Gateway ready")
+                    if payload.get("op") == 0 and payload.get("t") == "INTERACTION_CREATE":
+                        await self._handle_interaction(payload["d"])
+                    if (
+                        self._message_content_enabled
+                        and payload.get("op") == 0
+                        and payload.get("t") == "MESSAGE_CREATE"
+                    ):
+                        await self._handle_message_create(payload["d"])
+                    if payload.get("op") == 0 and payload.get("t") == "GUILD_MEMBER_UPDATE":
+                        await self._handle_member_update(payload["d"])
+                    if payload.get("op") == 0 and payload.get("t") == "GUILD_MEMBER_REMOVE":
+                        await self._handle_member_remove(payload["d"])
+            finally:
+                heartbeat.cancel()
+                feedback_dispatcher.cancel()
+                lesson_dispatcher.cancel()
+                await asyncio.gather(
+                    heartbeat,
+                    feedback_dispatcher,
+                    lesson_dispatcher,
+                    return_exceptions=True,
+                )
+
+    async def _heartbeat(self, websocket: Any, interval: float) -> None:
+        while True:
+            await asyncio.sleep(interval)
+            await websocket.send(json.dumps({"op": 1, "d": self._sequence}))
+
+    async def _dispatch_feedback_forever(self) -> None:
+        while True:
+            if self._feedback_service is not None:
+                for item in await self._feedback_service.list_pending():
+                    verdict = (
+                        "✅ Домашняя работа принята"
+                        if item.verdict.value == "accepted"
+                        else "🔄 Домашняя работа отправлена на доработку"
+                    )
+                    try:
+                        await self._api.send_channel_message(
+                            item.channel_id,
+                            {
+                                "content": f"**{verdict}**\n\n{item.message}",
+                                "allowed_mentions": {"parse": []},
+                            },
+                        )
+                        await self._feedback_service.mark_sent(item.feedback_id)
+                    except Exception as error:
+                        logger.exception("Discord feedback delivery failed")
+                        await self._feedback_service.mark_failed(item.feedback_id, str(error))
+            await asyncio.sleep(5)
+
+    async def _dispatch_lessons_forever(self) -> None:
+        while True:
+            await self._dispatch_lessons_once()
+            await asyncio.sleep(5)
+
+    async def _dispatch_lessons_once(self) -> None:
+        if self._lesson_delivery_service is None:
+            return
+        for item in await self._lesson_delivery_service.list_pending():
+            try:
+                message = await self._api.send_channel_message(
+                    item.channel_id,
+                    {
+                        "content": item.content,
+                        "allowed_mentions": {
+                            "parse": [],
+                            "users": [str(item.discord_user_id)],
+                        },
+                    },
+                )
+                await self._lesson_delivery_service.mark_sent(
+                    item.delivery_id,
+                    int(message["id"]),
+                )
+            except Exception as error:
+                logger.exception("Discord lesson delivery failed")
+                await self._lesson_delivery_service.mark_failed(
+                    item.delivery_id,
+                    str(error),
+                )
+
+    async def _handle_interaction(self, interaction: dict[str, Any]) -> None:
+        data = interaction.get("data") or {}
+        if str(data.get("custom_id", "")).startswith("submit_discord:"):
+            await self._handle_submission_confirmation(interaction)
+            return
+        if str(data.get("custom_id", "")).startswith("ask_curator:"):
+            await self._handle_question_confirmation(interaction)
+            return
+        if data.get("name") == "setup_project_fix":
+            await self._handle_setup(interaction)
+        elif data.get("name") == "homework":
+            await self._handle_homework(interaction)
+
+    async def _handle_message_create(self, message: dict[str, Any]) -> None:
+        if self._submission_service is None and self._question_service is None:
+            return
+        author = message.get("author") or {}
+        if author.get("bot") or int(author.get("id", 0)) == self._bot_user_id:
+            return
+        if int(message.get("guild_id", 0)) != self._guild_id:
+            return
+        content = str(message.get("content") or "").strip()
+        attachments = message.get("attachments") or []
+        if not content and not attachments:
+            return
+        channel_id = int(message["channel_id"])
+        user_id = int(author["id"])
+        member = message.get("member") or {}
+        is_thread_owner = await self._participant_service.record_activity(
+            guild_id=self._guild_id,
+            discord_user_id=user_id,
+            display_name=self._display_name(member, author, user_id),
+            username=author.get("username"),
+            global_name=author.get("global_name"),
+            avatar_hash=author.get("avatar"),
+            guild_joined_at=self._discord_datetime(member.get("joined_at")),
+            channel_id=channel_id,
+        )
+        if not is_thread_owner:
+            await self._resolve_question_from_curator_reply(
+                channel_id=channel_id,
+                responder_discord_user_id=user_id,
+            )
+            return
+        if self._submission_service is None or not await self._submission_service.can_offer(
+            guild_id=self._guild_id,
+            discord_user_id=user_id,
+            channel_id=channel_id,
+        ):
+            return
+        await self._api.send_channel_message(
+            channel_id,
+            {
+                "content": "Что сделать с этим сообщением?",
+                "message_reference": {
+                    "message_id": str(message["id"]),
+                    "channel_id": str(channel_id),
+                    "guild_id": str(self._guild_id),
+                    "fail_if_not_exists": False,
+                },
+                "allowed_mentions": {"parse": []},
+                "components": [
+                    {
+                        "type": 1,
+                        "components": [
+                            {
+                                "type": 2,
+                                "style": 1,
+                                "label": "Отправить на проверку",
+                                "custom_id": f"submit_discord:{message['id']}",
+                            },
+                            {
+                                "type": 2,
+                                "style": 2,
+                                "label": "Уточнить вопрос",
+                                "custom_id": f"ask_curator:{message['id']}",
+                            },
+                        ],
+                    }
+                ],
+            },
+        )
+
+    async def _resolve_question_from_curator_reply(
+        self,
+        *,
+        channel_id: int,
+        responder_discord_user_id: int,
+    ) -> None:
+        if self._question_service is None:
+            return
+        try:
+            await self._question_service.resolve_latest_open_in_channel(
+                guild_id=self._guild_id,
+                channel_id=channel_id,
+                responder_discord_user_id=responder_discord_user_id,
+            )
+        except Exception:
+            logger.exception("Discord question auto-resolve failed")
+
+    async def _handle_member_update(self, member: dict[str, Any]) -> None:
+        if int(member.get("guild_id", 0)) != self._guild_id:
+            return
+        user = member.get("user") or {}
+        user_id = int(user.get("id", 0))
+        if not user_id or user.get("bot"):
+            return
+        await self._participant_service.record_activity(
+            guild_id=self._guild_id,
+            discord_user_id=user_id,
+            display_name=self._display_name(member, user, user_id),
+            username=user.get("username"),
+            global_name=user.get("global_name"),
+            avatar_hash=user.get("avatar"),
+            guild_joined_at=self._discord_datetime(member.get("joined_at")),
+            touch_activity=False,
+        )
+
+    async def _handle_member_remove(self, member: dict[str, Any]) -> None:
+        if int(member.get("guild_id", 0)) != self._guild_id:
+            return
+        user = member.get("user") or {}
+        user_id = int(user.get("id", 0))
+        if user_id:
+            await self._participant_service.mark_left(
+                guild_id=self._guild_id,
+                discord_user_id=user_id,
+            )
+
+    async def _handle_submission_confirmation(self, interaction: dict[str, Any]) -> None:
+        interaction_id = str(interaction["id"])
+        interaction_token = str(interaction["token"])
+        application_id = str(interaction["application_id"])
+        await self._api.defer_message_update(interaction_id, interaction_token)
+        data = interaction.get("data") or {}
+        message_id = int(str(data["custom_id"]).split(":", 1)[1])
+        channel_id = int(interaction["channel_id"])
+        member = interaction.get("member") or {}
+        user = member.get("user") or interaction.get("user") or {}
+        user_id = int(user["id"])
+        prompt_message = interaction.get("message") or {}
+        try:
+            if self._submission_service is None or not self._message_content_enabled:
+                raise DiscordSubmissionAccessError
+            original = await self._api.channel_message(channel_id, message_id)
+            if int((original.get("author") or {}).get("id", 0)) != user_id:
+                raise DiscordSubmissionAccessError
+            attachments = tuple(
+                DiscordIncomingAttachment(
+                    attachment_id=int(item["id"]),
+                    url=str(item["url"]),
+                    file_name=str(item.get("filename") or "discord-file"),
+                    mime_type=item.get("content_type"),
+                    file_size=item.get("size"),
+                    width=item.get("width"),
+                    height=item.get("height"),
+                    duration_seconds=(
+                        int(item["duration_secs"])
+                        if item.get("duration_secs") is not None
+                        else None
+                    ),
+                )
+                for item in (original.get("attachments") or [])
+            )
+            receipt = await self._submission_service.submit_message(
+                guild_id=self._guild_id,
+                discord_user_id=user_id,
+                channel_id=channel_id,
+                message_id=message_id,
+                text=str(original.get("content") or ""),
+                attachments=attachments,
+            )
+            content = (
+                f"✅ ДЗ отправлено: урок {receipt.lesson_position} · "
+                f"{receipt.lesson_title}, попытка {receipt.attempt_number}."
+            )
+        except DiscordMessageAlreadySubmittedError:
+            content = "Это сообщение уже отправлено на проверку."
+        except SubmissionPendingError:
+            content = "Предыдущая работа ещё ожидает проверки куратора."
+        except AssignmentAcceptedError:
+            content = "Текущее домашнее задание уже принято."
+        except UnsupportedSubmissionKindError:
+            content = "Формат сообщения не подходит для текущего задания."
+        except (NoActiveAssignmentError, DiscordSubmissionAccessError):
+            content = "Нет активного задания или это не твоя приватная ветка."
+        except EmptySubmissionError:
+            content = "В сообщении нет текста или файлов для отправки."
+        if prompt_message.get("id"):
+            await self._api.edit_channel_message(
+                channel_id,
+                int(prompt_message["id"]),
+                {"content": content, "components": []},
+            )
+        else:
+            await self._api.followup(application_id, interaction_token, content)
+
+    async def _handle_question_confirmation(self, interaction: dict[str, Any]) -> None:
+        interaction_id = str(interaction["id"])
+        interaction_token = str(interaction["token"])
+        application_id = str(interaction["application_id"])
+        await self._api.defer_message_update(interaction_id, interaction_token)
+        data = interaction.get("data") or {}
+        message_id = int(str(data["custom_id"]).split(":", 1)[1])
+        channel_id = int(interaction["channel_id"])
+        member = interaction.get("member") or {}
+        user = member.get("user") or interaction.get("user") or {}
+        user_id = int(user["id"])
+        prompt_message = interaction.get("message") or {}
+        try:
+            if self._question_service is None or not self._message_content_enabled:
+                raise DiscordQuestionAccessError
+            original = await self._api.channel_message(channel_id, message_id)
+            if int((original.get("author") or {}).get("id", 0)) != user_id:
+                raise DiscordQuestionAccessError
+            await self._question_service.create_from_message(
+                guild_id=self._guild_id,
+                discord_user_id=user_id,
+                channel_id=channel_id,
+                message_id=message_id,
+                text=str(original.get("content") or ""),
+                attachment_count=len(original.get("attachments") or []),
+            )
+            await self._notify_staff_about_question(
+                channel_id=channel_id,
+                message_id=message_id,
+            )
+            content = "Вопрос передан команде. Ответ появится здесь, в этой ветке."
+        except DiscordQuestionAccessError:
+            content = "Не удалось передать вопрос. Проверь, что это твоя приватная ветка."
+        if prompt_message.get("id"):
+            await self._api.edit_channel_message(
+                channel_id,
+                int(prompt_message["id"]),
+                {"content": content, "components": []},
+            )
+        else:
+            await self._api.followup(application_id, interaction_token, content)
+
+    async def _notify_staff_about_question(self, *, channel_id: int, message_id: int) -> None:
+        if self._staff_role_id is None:
+            return
+        try:
+            await self._api.send_channel_message(
+                channel_id,
+                {
+                    "content": (
+                        f"<@&{self._staff_role_id}> нужен ответ в приватной ветке."
+                    ),
+                    "message_reference": {
+                        "message_id": str(message_id),
+                        "channel_id": str(channel_id),
+                        "guild_id": str(self._guild_id),
+                        "fail_if_not_exists": False,
+                    },
+                    "allowed_mentions": {
+                        "parse": [],
+                        "roles": [str(self._staff_role_id)],
+                    },
+                },
+            )
+        except Exception:
+            logger.exception("Discord staff question notification failed")
+
+    async def _handle_setup(self, interaction: dict[str, Any]) -> None:
+        interaction_id = str(interaction["id"])
+        interaction_token = str(interaction["token"])
+        application_id = str(interaction["application_id"])
+        await self._api.respond_interaction(
+            interaction_id,
+            interaction_token,
+            "Настройка Project FIX запущена…",
+        )
+        try:
+            result = await ProjectFixServerSetup(self._api).run(self._guild_id)
+            created = ", ".join(result.created) or "ничего"
+            existing = ", ".join(result.existing) or "ничего"
+            content = f"Готово. Создано: {created}. Уже существовало: {existing}."
+        except Exception:
+            logger.exception("Discord server setup failed")
+            content = "Настройка не завершена. Проверь права приложения и журнал."
+        await self._api.followup(application_id, interaction_token, content)
+
+    async def _handle_homework(self, interaction: dict[str, Any]) -> None:
+        interaction_id = str(interaction["id"])
+        interaction_token = str(interaction["token"])
+        application_id = str(interaction["application_id"])
+        await self._api.respond_interaction(
+            interaction_id,
+            interaction_token,
+            "Открываю личное пространство…",
+        )
+
+        member = interaction.get("member") or {}
+        user = member.get("user") or interaction.get("user") or {}
+        user_id = int(user["id"])
+        display_name = self._display_name(member, user, user_id)
+        try:
+            participant = await self._participant_service.get_or_create(
+                guild_id=self._guild_id,
+                discord_user_id=user_id,
+                display_name=display_name,
+                username=user.get("username"),
+                global_name=user.get("global_name"),
+                avatar_hash=user.get("avatar"),
+                guild_joined_at=self._discord_datetime(member.get("joined_at")),
+            )
+            if self._homework_manager is None:
+                raise RuntimeError("Discord homework manager is not initialized")
+            result = await self._homework_manager.get_or_create(
+                guild_id=self._guild_id,
+                discord_user_id=user_id,
+                display_name=display_name,
+                student_id=participant.student_id,
+            )
+            action = "создано" if result.created else "уже было создано"
+            assignment = (
+                await self._submission_service.current_assignment(
+                    guild_id=self._guild_id,
+                    discord_user_id=user_id,
+                )
+                if self._submission_service is not None
+                else None
+            )
+            content = (
+                f"Личное пространство {action}: <#{result.space.channel_id}>. "
+                "Открой его и отправляй домашние работы туда."
+            )
+            if assignment is None:
+                content += "\n\nСейчас активного домашнего задания нет."
+            else:
+                instructions = assignment.instructions.strip()
+                if len(instructions) > 1200:
+                    instructions = f"{instructions[:1197]}…"
+                content += (
+                    f"\n\n**Текущее ДЗ · {assignment.course_title}**"
+                    f"\nУрок {assignment.lesson_position}: {assignment.lesson_title}"
+                    f"\n{instructions}"
+                )
+        except Exception:
+            logger.exception("Discord homework space creation failed")
+            content = (
+                "Не удалось открыть личное пространство. "
+                "Проверь права приложения или обратись к куратору."
+            )
+        await self._api.followup(application_id, interaction_token, content)
+
+    @staticmethod
+    def _display_name(member: dict[str, Any], user: dict[str, Any], user_id: int) -> str:
+        return str(
+            member.get("nick")
+            or user.get("global_name")
+            or user.get("username")
+            or f"student-{user_id}"
+        )
+
+    @staticmethod
+    def _discord_datetime(value: object) -> datetime | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
