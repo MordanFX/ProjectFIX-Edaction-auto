@@ -53,6 +53,7 @@ class DiscordApplication:
         question_service: DiscordQuestionService | None = None,
         homework_channel_id: int | None = None,
         staff_role_id: int | None = None,
+        staff_role_ids: tuple[int, ...] = (),
     ) -> None:
         self._api = api
         self._token = token
@@ -65,7 +66,16 @@ class DiscordApplication:
         self._lesson_delivery_service = lesson_delivery_service
         self._question_service = question_service
         self._homework_channel_id = homework_channel_id
-        self._staff_role_id = staff_role_id
+        self._staff_role_ids = tuple(
+            dict.fromkeys(
+                role_id
+                for role_id in (
+                    *((staff_role_id,) if staff_role_id is not None else ()),
+                    *staff_role_ids,
+                )
+                if role_id is not None
+            )
+        )
         self._homework_manager: DiscordHomeworkManager | None = None
         self._bot_user_id: int | None = None
         self._sequence: int | None = None
@@ -455,14 +465,15 @@ class DiscordApplication:
             await self._api.followup(application_id, interaction_token, content)
 
     async def _notify_staff_about_question(self, *, channel_id: int, message_id: int) -> None:
-        if self._staff_role_id is None:
+        if not self._staff_role_ids:
             return
         try:
+            role_mentions = " ".join(f"<@&{role_id}>" for role_id in self._staff_role_ids)
             await self._api.send_channel_message(
                 channel_id,
                 {
                     "content": (
-                        f"<@&{self._staff_role_id}> нужен ответ в приватной ветке."
+                        f"{role_mentions} нужен ответ в приватной ветке."
                     ),
                     "message_reference": {
                         "message_id": str(message_id),
@@ -472,7 +483,7 @@ class DiscordApplication:
                     },
                     "allowed_mentions": {
                         "parse": [],
-                        "roles": [str(self._staff_role_id)],
+                        "roles": [str(role_id) for role_id in self._staff_role_ids],
                     },
                 },
             )

@@ -1,10 +1,10 @@
 """Application configuration loaded from environment variables."""
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -30,9 +30,25 @@ class Settings(BaseSettings):
     discord_guild_id: int | None = None
     discord_homework_channel_id: int | None = None
     discord_staff_role_id: int | None = None
+    discord_staff_role_ids: Annotated[tuple[int, ...], NoDecode] = ()
     discord_message_content_enabled: bool = False
     jwt_secret: SecretStr | None = None
     jwt_access_token_expire_minutes: int = 60
+
+    @field_validator("discord_staff_role_ids", mode="before")
+    @classmethod
+    def parse_discord_staff_role_ids(cls, value: object) -> tuple[int, ...]:
+        if value in (None, ""):
+            return ()
+        if isinstance(value, str):
+            return tuple(
+                int(item.strip())
+                for item in value.split(",")
+                if item.strip()
+            )
+        if isinstance(value, (list, tuple, set)):
+            return tuple(int(item) for item in value)
+        return (int(value),)
 
 
 @lru_cache

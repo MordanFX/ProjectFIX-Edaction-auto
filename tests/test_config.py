@@ -23,3 +23,11 @@ def test_settings_read_environment(monkeypatch) -> None:
     assert settings.telegram_bot_token is not None
     assert settings.telegram_bot_token.get_secret_value() == "not-a-real-token"
     assert "not-a-real-token" not in repr(settings)
+
+
+def test_settings_parse_discord_staff_role_ids(monkeypatch) -> None:
+    monkeypatch.setenv("DISCORD_STAFF_ROLE_IDS", "132, 140,143")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.discord_staff_role_ids == (132, 140, 143)

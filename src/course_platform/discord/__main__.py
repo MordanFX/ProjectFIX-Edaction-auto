@@ -37,6 +37,7 @@ async def main() -> None:
                 question_service=DiscordQuestionService(session_factory),
                 homework_channel_id=settings.discord_homework_channel_id,
                 staff_role_id=settings.discord_staff_role_id,
+                staff_role_ids=settings.discord_staff_role_ids,
             ).run()
     finally:
         await engine.dispose()

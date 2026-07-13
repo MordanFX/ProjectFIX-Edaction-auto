@@ -316,6 +316,54 @@ async def test_question_confirmation_mentions_staff_role_when_configured() -> No
     ]
 
 
+async def test_question_confirmation_mentions_multiple_staff_roles_when_configured() -> None:
+    api = FakeAPI()
+    app = DiscordApplication(
+        api,  # type: ignore[arg-type]
+        "token",
+        100,
+        object(),  # type: ignore[arg-type]
+        FakeParticipantService(),  # type: ignore[arg-type]
+        FakeSubmissionService(),  # type: ignore[arg-type]
+        message_content_enabled=True,
+        question_service=FakeQuestionService(),  # type: ignore[arg-type]
+        staff_role_ids=(900, 901, 902),
+    )
+
+    await app._handle_question_confirmation(  # noqa: SLF001
+        {
+            "id": "500",
+            "token": "interaction-token",
+            "application_id": "600",
+            "channel_id": "300",
+            "member": {"user": {"id": "200"}},
+            "data": {"custom_id": "ask_curator:400"},
+            "message": {"id": "700"},
+        }
+    )
+
+    assert api.channel_messages == [
+        (
+            300,
+            {
+                "content": (
+                    "<@&900> <@&901> <@&902> "
+                    "\u043d\u0443\u0436\u0435\u043d \u043e\u0442\u0432\u0435\u0442 "
+                    "\u0432 \u043f\u0440\u0438\u0432\u0430\u0442\u043d\u043e\u0439 "
+                    "\u0432\u0435\u0442\u043a\u0435."
+                ),
+                "message_reference": {
+                    "message_id": "400",
+                    "channel_id": "300",
+                    "guild_id": "100",
+                    "fail_if_not_exists": False,
+                },
+                "allowed_mentions": {"parse": [], "roles": ["900", "901", "902"]},
+            },
+        )
+    ]
+
+
 async def test_curator_reply_resolves_question_without_submission_prompt() -> None:
     api = FakeAPI()
     questions = FakeQuestionService()
