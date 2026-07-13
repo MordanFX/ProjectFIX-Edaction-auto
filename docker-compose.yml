@@ -1,0 +1,97 @@
+name: projectfix-education
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PROJECTFIX_POSTGRES_USER:-projectfix}
+      POSTGRES_PASSWORD: ${PROJECTFIX_POSTGRES_PASSWORD:-projectfix-change-me}
+      POSTGRES_DB: ${PROJECTFIX_POSTGRES_DB:-projectfix}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${PROJECTFIX_POSTGRES_USER:-projectfix} -d ${PROJECTFIX_POSTGRES_DB:-projectfix}",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${PROJECTFIX_POSTGRES_USER:-projectfix}:${PROJECTFIX_POSTGRES_PASSWORD:-projectfix-change-me}@postgres:5432/${PROJECTFIX_POSTGRES_DB:-projectfix}
+    command: ["alembic", "upgrade", "head"]
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${PROJECTFIX_POSTGRES_USER:-projectfix}:${PROJECTFIX_POSTGRES_PASSWORD:-projectfix-change-me}@postgres:5432/${PROJECTFIX_POSTGRES_DB:-projectfix}
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/api/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${PROJECTFIX_POSTGRES_USER:-projectfix}:${PROJECTFIX_POSTGRES_PASSWORD:-projectfix-change-me}@postgres:5432/${PROJECTFIX_POSTGRES_DB:-projectfix}
+    command: ["python", "-m", "course_platform.bot"]
+
+  discord-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${PROJECTFIX_POSTGRES_USER:-projectfix}:${PROJECTFIX_POSTGRES_PASSWORD:-projectfix-change-me}@postgres:5432/${PROJECTFIX_POSTGRES_DB:-projectfix}
+    command: ["python", "-m", "course_platform.discord"]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${PROJECTFIX_FRONTEND_PORT:-8081}:80"
+
+volumes:
+  postgres_data:

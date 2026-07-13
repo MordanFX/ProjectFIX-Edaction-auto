@@ -1,0 +1,26 @@
+.git/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.local/
+.runtime/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+frontend/node_modules/
+frontend/dist/
+
+*.png
+*.jpg
+*.jpeg
+!frontend/src/assets/*.png
+!frontend/src/assets/*.jpg
+!frontend/public/course-assets/*.png
+!frontend/Logo для чата 4.jpg
