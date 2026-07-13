@@ -78,7 +78,7 @@ async def test_dispatcher_sends_student_chain_and_curator_alert(
     assert len(student_messages) == 2
     assert all(
         any(
-                    button["text"] == "▶ Продолжить"
+                    button["text"] == "📘 Текущий урок"
             for row in message["reply_markup"]["keyboard"]
             for button in row
         )

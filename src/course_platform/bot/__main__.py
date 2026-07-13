@@ -5,7 +5,7 @@ import logging
 
 from course_platform.bot.api import TelegramBotClient
 from course_platform.bot.application import BotApplication
-from course_platform.bot.notifications import TelegramFeedbackDispatcher
+from course_platform.bot.notifications import TelegramAccessDispatcher, TelegramFeedbackDispatcher
 from course_platform.bot.reminders import TelegramLessonReminderDispatcher
 from course_platform.bot.router import MessageRouter
 from course_platform.config import get_settings
@@ -13,11 +13,14 @@ from course_platform.db.session import create_engine, create_session_factory
 from course_platform.integrations.vimeo import VimeoOEmbedClient
 from course_platform.services.admin_dashboard import AdminDashboardService
 from course_platform.services.learning import LearningService
-from course_platform.services.notifications import FeedbackNotificationService
+from course_platform.services.notifications import (
+    AccessNotificationService,
+    FeedbackNotificationService,
+)
 from course_platform.services.progression import ProgressionService
 from course_platform.services.reminders import LessonReminderService
 from course_platform.services.reviews import ReviewService
-from course_platform.services.students import StudentService
+from course_platform.services.students import StudentAccessService, StudentService
 from course_platform.services.submissions import SubmissionService
 
 
@@ -53,11 +56,16 @@ async def run_bot() -> None:
                 ReviewService(session_factory),
                 ProgressionService(session_factory),
                 AdminDashboardService(session_factory),
+                StudentAccessService(session_factory),
                 vimeo,
             )
             feedback_dispatcher = TelegramFeedbackDispatcher(
                 api,
                 FeedbackNotificationService(session_factory),
+            )
+            access_dispatcher = TelegramAccessDispatcher(
+                api,
+                AccessNotificationService(session_factory),
             )
             reminder_dispatcher = TelegramLessonReminderDispatcher(
                 api,
@@ -66,6 +74,7 @@ async def run_bot() -> None:
             await BotApplication(
                 api,
                 router,
+                access_dispatcher=access_dispatcher,
                 feedback_dispatcher=feedback_dispatcher,
                 reminder_dispatcher=reminder_dispatcher,
             ).run_forever()

@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from course_platform.bot.api import TelegramAPIError, TelegramBotClient, TelegramTransportError
-from course_platform.bot.notifications import TelegramFeedbackDispatcher
+from course_platform.bot.notifications import TelegramAccessDispatcher, TelegramFeedbackDispatcher
 from course_platform.bot.reminders import TelegramLessonReminderDispatcher
 from course_platform.bot.router import MessageRouter
 
@@ -21,6 +21,7 @@ class BotApplication:
         *,
         poll_timeout: int = 30,
         retry_delay: float = 2.0,
+        access_dispatcher: TelegramAccessDispatcher | None = None,
         feedback_dispatcher: TelegramFeedbackDispatcher | None = None,
         reminder_dispatcher: TelegramLessonReminderDispatcher | None = None,
     ) -> None:
@@ -28,6 +29,7 @@ class BotApplication:
         self._router = router
         self._poll_timeout = poll_timeout
         self._retry_delay = retry_delay
+        self._access_dispatcher = access_dispatcher
         self._feedback_dispatcher = feedback_dispatcher
         self._reminder_dispatcher = reminder_dispatcher
         self._next_offset: int | None = None
@@ -44,6 +46,12 @@ class BotApplication:
                 logger.exception("Failed to handle Telegram update %s", update.update_id)
             finally:
                 self._next_offset = update.update_id + 1
+
+        if self._access_dispatcher is not None:
+            try:
+                await self._access_dispatcher.dispatch_pending()
+            except Exception:
+                logger.exception("Failed to dispatch pending access notifications")
 
         if self._feedback_dispatcher is not None:
             try:

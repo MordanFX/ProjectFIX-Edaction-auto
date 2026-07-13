@@ -8,7 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_platform.db.session import session_scope
-from course_platform.models import Assignment, Enrollment, Feedback, Lesson, Student, Submission
+from course_platform.models import (
+    Assignment,
+    Cohort,
+    Course,
+    Enrollment,
+    Feedback,
+    Lesson,
+    Student,
+    Submission,
+)
 from course_platform.models.enums import (
     EnrollmentStatus,
     FeedbackVerdict,
@@ -24,6 +33,14 @@ class FeedbackNotification:
     message: str
     current_lesson_position: int
     course_completed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AccessNotification:
+    enrollment_id: UUID
+    student_telegram_user_id: int
+    course_title: str
+    current_lesson_position: int
 
 
 class FeedbackNotificationService:
@@ -92,3 +109,49 @@ class FeedbackNotificationService:
             feedback.notification_status = NotificationStatus.FAILED
             feedback.notification_attempts += 1
             feedback.notification_error = error[:1000]
+
+
+class AccessNotificationService:
+    """Notify Telegram students when a curator/admin opens course access."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def list_pending(self, *, limit: int = 50) -> list[AccessNotification]:
+        async with self._session_factory() as session:
+            rows = await session.execute(
+                select(
+                    Enrollment.id,
+                    Student.telegram_user_id,
+                    Course.title,
+                    Enrollment.current_lesson_position,
+                )
+                .join(Student, Student.id == Enrollment.student_id)
+                .join(Cohort, Cohort.id == Enrollment.cohort_id)
+                .join(Course, Course.id == Cohort.course_id)
+                .where(
+                    Student.telegram_user_id.is_not(None),
+                    Student.is_active.is_(True),
+                    Course.is_active.is_(True),
+                    Enrollment.status == EnrollmentStatus.ACTIVE,
+                    Enrollment.access_notified_at.is_(None),
+                )
+                .order_by(Enrollment.created_at.asc())
+                .limit(limit)
+            )
+            return [
+                AccessNotification(
+                    enrollment_id=row.id,
+                    student_telegram_user_id=row.telegram_user_id,
+                    course_title=row.title,
+                    current_lesson_position=row.current_lesson_position,
+                )
+                for row in rows
+            ]
+
+    async def mark_sent(self, enrollment_id: UUID) -> None:
+        async with session_scope(self._session_factory) as session:
+            enrollment = await session.get(Enrollment, enrollment_id)
+            if enrollment is None:
+                return
+            enrollment.access_notified_at = datetime.now(UTC)

@@ -34,6 +34,7 @@ def test_expected_tables_are_registered() -> None:
             "discord_lesson_deliveries",
             "discord_lesson_dispatches",
             "discord_link_codes",
+            "discord_questions",
             "discord_student_links",
         "enrollments",
         "feedback",

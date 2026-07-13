@@ -108,6 +108,7 @@ class Enrollment(PrimaryKeyMixin, TimestampMixin, Base):
     current_lesson_position: Mapped[int] = mapped_column(default=1)
     access_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     access_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    access_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     access_source: Mapped[str | None] = mapped_column(String(32))
     access_plan: Mapped[str | None] = mapped_column(String(32))
 

@@ -49,7 +49,12 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["resolved_by_staff_id"], ["staff_users.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["student_id"], ["students.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("guild_id", "channel_id", "message_id", name="discord_question_message"),
+        sa.UniqueConstraint(
+            "guild_id",
+            "channel_id",
+            "message_id",
+            name="discord_question_message",
+        ),
     )
     op.create_index("ix_discord_questions_guild_id", "discord_questions", ["guild_id"])
     op.create_index("ix_discord_questions_channel_id", "discord_questions", ["channel_id"])

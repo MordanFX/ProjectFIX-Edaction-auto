@@ -5,7 +5,12 @@ from pathlib import Path
 from uuid import UUID
 
 from course_platform.bot.api import TelegramAPIError, TelegramBotClient, TelegramTransportError
-from course_platform.bot.types import TelegramMessage, TelegramUpdate, TelegramUser
+from course_platform.bot.types import (
+    TelegramCallbackQuery,
+    TelegramMessage,
+    TelegramUpdate,
+    TelegramUser,
+)
 from course_platform.bot.ui import curator_keyboard, main_keyboard
 from course_platform.integrations.vimeo import VimeoOEmbedClient
 from course_platform.models.enums import (
@@ -35,6 +40,8 @@ from course_platform.services.students import (
     InvalidQuietHoursError,
     InvalidTimezoneError,
     ProgressSnapshot,
+    StudentAccessError,
+    StudentAccessService,
     StudentJourney,
     StudentRegistration,
     StudentService,
@@ -67,6 +74,7 @@ class MessageRouter:
         reviews: ReviewService,
         progression: ProgressionService,
         dashboard: AdminDashboardService,
+        access: StudentAccessService | None = None,
         vimeo: VimeoOEmbedClient | None = None,
     ) -> None:
         self._api = api
@@ -76,8 +84,11 @@ class MessageRouter:
         self._reviews = reviews
         self._progression = progression
         self._dashboard = dashboard
+        self._access = access
         self._vimeo = vimeo
         self._pending_video_lessons: dict[int, UUID] = {}
+        self._grant_sessions: dict[int, dict[str, UUID]] = {}
+        self._grant_selected_students: dict[int, UUID] = {}
 
     async def handle(self, update: TelegramUpdate) -> bool:
         if update.callback_query is not None:
@@ -97,6 +108,8 @@ class MessageRouter:
                 return await self._handle_lesson_callback(update)
             if callback_data.startswith("settings:"):
                 return await self._handle_settings_callback(update)
+            if callback_data.startswith("grant:"):
+                return await self._handle_grant_callback(update)
             if callback_data.startswith("course_video:"):
                 lesson_id = UUID(callback_data.split(":", 1)[1])
                 self._pending_video_lessons[update.callback_query.sender.id] = lesson_id
@@ -274,6 +287,9 @@ class MessageRouter:
             response = await self._curator_summary(message.sender.id)
         elif command == "/curator_students":
             response = await self._curator_students(message.sender.id)
+        elif command == "/grant_access":
+            await self._send_grant_student_picker(message)
+            return True
         elif command == "/course_videos":
             lessons = await self._learning.list_video_lessons(message.sender.id)
             response = "🎬 <b>ВИДЕО УРОКОВ</b>\n\nВыбери урок, затем отправь видео боту."
@@ -309,6 +325,7 @@ class MessageRouter:
                 "/review_history",
                 "/curator_dashboard",
                 "/curator_students",
+                "/grant_access",
                 "/cancel_review",
             }
             if (
@@ -879,14 +896,23 @@ class MessageRouter:
         normalized_text = text.strip().casefold()
         project_fix_commands = {
             "▶ продолжить": "/lesson",
+            "📘 текущий урок": "/lesson",
             "▦ мой прогресс": "/progress",
+            "📊 мой прогресс": "/progress",
             "▤ программа курса": "/lessons",
+            "📚 программа курса": "/lessons",
             "▣ мои разборы": "/journal",
+            "🗂 мои разборы": "/journal",
             "📥 сдать работу": "/submit",
+            "📥 сдать дз": "/submit",
             "↻ отправить доработку": "/submit",
+            "🔄 отправить доработку": "/submit",
             "⏳ статус работы": "/status",
+            "⏳ статус дз": "/status",
             "⚙ настройки": "/settings",
+            "⚙️ настройки": "/settings",
             "? помощь": "/help",
+            "ℹ️ помощь": "/help",
             "📚 база материалов": "/lessons",
             "режим куратора": "/curator_mode",
         }
@@ -908,6 +934,7 @@ class MessageRouter:
             "🗂 проверенные": "/review_history",
             "📊 сводка куратора": "/curator_dashboard",
             "👥 ученики": "/curator_students",
+            "🎓 выдать доступ": "/grant_access",
             "🎬 видео уроков": "/course_videos",
             "🎓 режим ученика": "/student_mode",
             "🧑‍💼 режим куратора": "/curator_mode",
@@ -962,6 +989,267 @@ class MessageRouter:
                 ]
             )
         return "\n".join(lines)
+
+    async def _send_grant_student_picker(self, message: TelegramMessage) -> None:
+        if message.sender is None or not await self._reviews.is_reviewer(message.sender.id):
+            await self._api.send_message(
+                message.chat.id,
+                "⛔ <b>Нет доступа к выдаче курсов.</b>",
+                parse_mode="HTML",
+                reply_markup=await self._main_keyboard(message.sender.id if message.sender else 0),
+            )
+            return
+        if self._access is None:
+            await self._api.send_message(
+                message.chat.id,
+                "⚠️ <b>Выдача курсов временно недоступна.</b>",
+                parse_mode="HTML",
+                reply_markup=curator_keyboard(),
+            )
+            return
+
+        students = await self._access.list_telegram_students_for_grant()
+        if not students:
+            await self._api.send_message(
+                message.chat.id,
+                "👥 <b>Нет Telegram-учеников для выдачи доступа.</b>\n\n"
+                "Ученик должен сначала нажать /start в боте.",
+                parse_mode="HTML",
+                reply_markup=curator_keyboard(),
+            )
+            return
+
+        session: dict[str, UUID] = {}
+        rows: list[list[dict[str, object]]] = []
+        for index, student in enumerate(students, start=1):
+            key = f"s{index}"
+            session[key] = student.student_id
+            rows.append(
+                [
+                    {
+                        "text": self._grant_student_button_text(
+                            student.name,
+                            student.username,
+                            student.course_title,
+                        ),
+                        "callback_data": f"grant:student:{key}",
+                    }
+                ]
+            )
+        self._grant_sessions[message.sender.id] = session
+        self._grant_selected_students.pop(message.sender.id, None)
+
+        await self._api.send_message(
+            message.chat.id,
+            "🎓 <b>Выдать доступ к курсу</b>\n\n"
+            "Шаг 1 из 3: выбери Telegram-ученика.\n"
+            "Если ученика нет в списке — он должен сначала нажать /start в боте.",
+            parse_mode="HTML",
+            reply_markup={"inline_keyboard": rows},
+        )
+
+    async def _handle_grant_callback(self, update: TelegramUpdate) -> bool:
+        callback = update.callback_query
+        if callback is None or callback.data is None:
+            return False
+        if not await self._reviews.is_reviewer(callback.sender.id):
+            await self._api.answer_callback_query(
+                callback.id,
+                text="Нет доступа к выдаче курсов",
+                show_alert=True,
+            )
+            return True
+        if self._access is None:
+            await self._api.answer_callback_query(
+                callback.id,
+                text="Выдача курсов временно недоступна",
+                show_alert=True,
+            )
+            return True
+
+        parts = callback.data.split(":")
+        action = parts[1] if len(parts) > 1 else ""
+        if action == "student" and len(parts) == 3:
+            await self._api.answer_callback_query(callback.id)
+            await self._send_grant_course_picker(callback, parts[2])
+            return True
+        if action == "course" and len(parts) == 3:
+            await self._api.answer_callback_query(callback.id)
+            await self._send_grant_confirmation(callback, parts[2])
+            return True
+        if action == "confirm":
+            await self._confirm_grant(callback)
+            return True
+        if action == "cancel":
+            self._grant_sessions.pop(callback.sender.id, None)
+            self._grant_selected_students.pop(callback.sender.id, None)
+            await self._api.answer_callback_query(callback.id, text="Отменено")
+            if callback.message is not None:
+                await self._api.send_message(
+                    callback.message.chat.id,
+                    "Выдача доступа отменена.",
+                    reply_markup=curator_keyboard(),
+                )
+            return True
+
+        await self._api.answer_callback_query(
+            callback.id,
+            text="Действие устарело. Открой «Выдать доступ» заново.",
+            show_alert=True,
+        )
+        return True
+
+    async def _send_grant_course_picker(
+        self,
+        callback: TelegramCallbackQuery,
+        student_key: str,
+    ) -> None:
+        sender = callback.sender
+        message = callback.message
+        session = self._grant_sessions.get(sender.id, {})
+        student_id = session.get(student_key)
+        if student_id is None or message is None:
+            await self._api.send_message(
+                sender.id,
+                "⚠️ Сессия выдачи устарела. Нажми «🎓 Выдать доступ» заново.",
+                reply_markup=curator_keyboard(),
+            )
+            return
+        courses = await self._access.list_telegram_courses_for_grant() if self._access else ()
+        if not courses:
+            await self._api.send_message(
+                message.chat.id,
+                "📚 <b>Нет активных Telegram-курсов.</b>\n\n"
+                "Курс нужно создать и опубликовать в веб-панели.",
+                parse_mode="HTML",
+                reply_markup=curator_keyboard(),
+            )
+            return
+
+        self._grant_selected_students[sender.id] = student_id
+        rows: list[list[dict[str, object]]] = []
+        for index, course in enumerate(courses, start=1):
+            key = f"c{index}"
+            session[key] = course.course_id
+            rows.append(
+                [
+                    {
+                        "text": self._grant_course_button_text(
+                            course.title,
+                            course.lessons_count,
+                            course.students_count,
+                        ),
+                        "callback_data": f"grant:course:{key}",
+                    }
+                ]
+            )
+        self._grant_sessions[sender.id] = session
+
+        await self._api.send_message(
+            message.chat.id,
+            "🎓 <b>Выдать доступ к курсу</b>\n\n"
+            "Шаг 2 из 3: выбери Telegram-курс.\n"
+            "Создание и редактирование курсов остаётся в веб-панели.",
+            parse_mode="HTML",
+            reply_markup={"inline_keyboard": rows},
+        )
+
+    async def _send_grant_confirmation(
+        self,
+        callback: TelegramCallbackQuery,
+        course_key: str,
+    ) -> None:
+        sender = callback.sender
+        message = callback.message
+        session = self._grant_sessions.get(sender.id, {})
+        student_id = self._grant_selected_students.get(sender.id)
+        course_id = session.get(course_key)
+        if student_id is None or course_id is None or message is None:
+            await self._api.send_message(
+                sender.id,
+                "⚠️ Сессия выдачи устарела. Нажми «🎓 Выдать доступ» заново.",
+                reply_markup=curator_keyboard(),
+            )
+            return
+        session["selected_course"] = course_id
+        self._grant_sessions[sender.id] = session
+
+        await self._api.send_message(
+            message.chat.id,
+            "✅ <b>Подтверди выдачу доступа</b>\n\n"
+            "После подтверждения ученик получит уведомление в Telegram "
+            "и сможет открыть текущий урок.\n\n"
+            "<i>Если у ученика уже был другой Telegram-курс, активный курс будет заменён.</i>",
+            parse_mode="HTML",
+            reply_markup={
+                "inline_keyboard": [
+                    [{"text": "✅ Выдать доступ", "callback_data": "grant:confirm"}],
+                    [{"text": "Отмена", "callback_data": "grant:cancel"}],
+                ]
+            },
+        )
+
+    async def _confirm_grant(self, callback: TelegramCallbackQuery) -> None:
+        sender = callback.sender
+        message = callback.message
+        session = self._grant_sessions.get(sender.id, {})
+        student_id = self._grant_selected_students.get(sender.id)
+        course_id = session.get("selected_course")
+        if self._access is None or student_id is None or course_id is None:
+            await self._api.answer_callback_query(
+                callback.id,
+                text="Сессия выдачи устарела",
+                show_alert=True,
+            )
+            return
+
+        try:
+            detail = await self._access.grant_telegram_course(
+                student_id=student_id,
+                course_id=course_id,
+            )
+        except StudentAccessError:
+            await self._api.answer_callback_query(
+                callback.id,
+                text="Не удалось выдать доступ",
+                show_alert=True,
+            )
+            return
+
+        self._grant_sessions.pop(sender.id, None)
+        self._grant_selected_students.pop(sender.id, None)
+        await self._api.answer_callback_query(
+            callback.id,
+            text="Доступ выдан",
+        )
+        chat_id = message.chat.id if message is not None else sender.id
+        await self._api.send_message(
+            chat_id,
+            "✅ <b>Доступ выдан</b>\n\n"
+            f"Ученик: <b>{escape(getattr(detail, 'name', 'Telegram ученик'))}</b>\n"
+            f"Курс: <b>{escape(getattr(detail, 'course_title', 'Telegram курс'))}</b>\n\n"
+            "Ученик получит уведомление и кнопку для открытия текущего урока.",
+            parse_mode="HTML",
+            reply_markup=curator_keyboard(),
+        )
+
+    @staticmethod
+    def _grant_student_button_text(
+        name: str,
+        username: str | None,
+        course_title: str | None,
+    ) -> str:
+        identity = f"{name} · @{username}" if username else name
+        status = course_title or "без курса"
+        return f"{identity} · {status}"[:64]
+
+    @staticmethod
+    def _grant_course_button_text(
+        title: str,
+        lessons_count: int,
+        students_count: int,
+    ) -> str:
+        return f"{title} · {lessons_count} уроков · {students_count} учеников"[:64]
 
     @staticmethod
     def _student_registration(user: TelegramUser) -> StudentRegistration:
@@ -1113,7 +1401,7 @@ class MessageRouter:
                 [
                     "",
                     "<b>Куратору:</b> /reviews · /review_history · "
-                    "/curator_dashboard · /curator_students",
+                    "/curator_dashboard · /curator_students · /grant_access",
                 ]
             )
         return "\n".join(lines)
@@ -1281,32 +1569,42 @@ class MessageRouter:
         return "\n\n".join(parts)
 
     async def _send_lesson_workspace(self, chat_id: int, lesson: CurrentLesson) -> None:
-        status = "COMPLETED" if lesson.viewed_at is not None else "IN PROGRESS"
-        homework = " · HOMEWORK" if lesson.assignment_instructions else ""
+        status = "просмотрен" if lesson.viewed_at is not None else "нужно посмотреть"
+        homework = "есть ДЗ" if lesson.assignment_instructions else "без ДЗ"
         viewed_count = sum(material.is_viewed for material in lesson.materials)
         progress_bar = "■" * viewed_count + "□" * (len(lesson.materials) - viewed_count)
         video_count = sum(material.kind == "video" for material in lesson.materials)
         image_count = sum(material.kind == "image" for material in lesson.materials)
-        material_summary = f"{video_count} VIDEO"
+        material_summary = f"🎬 видео: {video_count}"
         if image_count:
-            material_summary += f" · {image_count} CHART"
-        description = escape(lesson.description or "Описание недели скоро появится.")
+            material_summary += f" · 🖼 изображения: {image_count}"
+        description = escape(lesson.description or "Описание урока скоро появится.")
+        next_step = (
+            "Следующий шаг: посмотри материалы, затем нажми «✅ Я посмотрел урок»."
+            if lesson.viewed_at is None
+            else (
+                "Следующий шаг: нажми «📥 Сдать ДЗ», когда ответ будет готов."
+                if lesson.assignment_instructions
+                else "Урок просмотрен. Можно перейти к следующему доступному уроку."
+            )
+        )
         caption = (
-            f"<b>PROJECT FIX / STEP {lesson.position:02d}</b>\n"
-            f"{escape(lesson.course_title)}\n\n"
+            f"📘 <b>Урок {lesson.position} из {lesson.total_lessons}</b>\n"
+            f"Курс: <b>{escape(lesson.course_title)}</b>\n\n"
             f"<b>{escape(lesson.title)}</b>\n"
-            f"{material_summary}{homework}\n"
-            f"STATUS / {status}\n\n"
-            f"{progress_bar}  {viewed_count}/{len(lesson.materials)}\n\n"
-            f"{description}"
+            f"{material_summary} · 📝 {homework}\n"
+            f"Статус: <b>{status}</b>\n"
+            f"Прогресс материалов: {progress_bar} {viewed_count}/{len(lesson.materials)}\n\n"
+            f"{description}\n\n"
+            f"<i>{escape(next_step)}</i>"
         )
         rows = [
             [
                 {
                     "text": (
                         f"{'✓' if material.is_viewed else '○'} "
-                        f"{'▧' if material.kind == 'image' else '▶'} "
-                        f"{material.position:02d} · {material.title}"
+                        f"{'🖼' if material.kind == 'image' else '▶️'} "
+                        f"{material.position}. {material.title}"
                     )[:64],
                     "callback_data": (
                         f"material:{lesson.lesson_id}:{material.position}"
@@ -1336,7 +1634,7 @@ class MessageRouter:
             rows.append(
                 [
                     {
-                        "text": "✓ Завершить изучение недели",
+                        "text": "✅ Я посмотрел урок",
                         "callback_data": f"lesson:viewed:{lesson.lesson_id}",
                     }
                 ]

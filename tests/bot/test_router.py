@@ -184,9 +184,9 @@ async def test_start_registers_student_and_replies(
     assert sent_messages[0]["parse_mode"] == "HTML"
     assert sent_messages[0]["reply_markup"] == {
         "keyboard": [
-            [{"text": "▶ Продолжить"}, {"text": "▦ Мой прогресс"}],
-            [{"text": "▤ Программа курса"}, {"text": "▣ Мои разборы"}],
-            [{"text": "⚙ Настройки"}, {"text": "? Помощь"}],
+            [{"text": "📘 Текущий урок"}, {"text": "📊 Мой прогресс"}],
+            [{"text": "📚 Программа курса"}, {"text": "🗂 Мои разборы"}],
+            [{"text": "⚙️ Настройки"}, {"text": "ℹ️ Помощь"}],
         ],
         "resize_keyboard": True,
         "input_field_placeholder": "PROJECT FIX · выбери действие",
@@ -480,13 +480,13 @@ async def test_multi_video_lesson_opens_workspace_then_selected_material(
     workspace = next(
         payload
         for method, payload in api_calls
-        if method == "sendMessage" and "PROJECT FIX / STEP 01" in str(payload["text"])
+        if method == "sendMessage" and "Урок 1 из" in str(payload["text"])
     )
     assert workspace["reply_markup"]["inline_keyboard"][1][0]["callback_data"] == (
         f"material:{lesson_id}:2"
     )
     assert any(
-        method == "sendMessage" and "PROJECT FIX / 01.02" in str(payload.get("text"))
+        method == "sendMessage" and "01.02" in str(payload.get("text"))
         for method, payload in api_calls
     )
     assert any(
@@ -558,7 +558,7 @@ async def test_viewed_callback_updates_lesson_and_unlocks_homework(
         for row in viewed_message["reply_markup"]["keyboard"]
         for button in row
     }
-    assert "📥 Сдать работу" in button_labels
+    assert "📥 Сдать ДЗ" in button_labels
     assert "СДАЧА ДОМАШНЕГО ЗАДАНИЯ" in str(api_calls[-1][1]["text"])
 
 
@@ -790,7 +790,7 @@ async def test_curator_queue_and_accept_callback_open_next_lesson(
         for method, payload in api_calls
     )
     assert any(
-        method == "sendMessage" and "ДЗ ПРИНЯТО" in str(payload["text"])
+        method == "sendMessage" and "ДЗ принято" in str(payload["text"])
         for method, payload in api_calls
     )
     assert any(
@@ -847,6 +847,7 @@ def test_help_and_next_step_placeholders_are_clear() -> None:
         "🗂 Проверенные",
         "📊 Сводка куратора",
         "👥 Ученики",
+        "🎓 Выдать доступ",
         "🎓 Режим ученика",
         "🎬 Видео уроков",
     }

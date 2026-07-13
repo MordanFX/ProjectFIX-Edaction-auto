@@ -82,6 +82,23 @@ class StudentJourney:
     quiet_hours_end: int
 
 
+@dataclass(frozen=True, slots=True)
+class TelegramCourseGrantStudent:
+    student_id: UUID
+    name: str
+    username: str | None
+    course_title: str | None
+    current_lesson_position: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class TelegramCourseGrantCourse:
+    course_id: UUID
+    title: str
+    lessons_count: int
+    students_count: int
+
+
 class InvalidTimezoneError(ValueError):
     """Raised when a student selects an unknown IANA timezone."""
 
@@ -364,6 +381,133 @@ class StudentAccessService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
+    async def list_telegram_students_for_grant(
+        self,
+        *,
+        limit: int = 12,
+    ) -> tuple[TelegramCourseGrantStudent, ...]:
+        async with self._session_factory() as session:
+            rows = await session.execute(
+                select(
+                    Student.id,
+                    Student.first_name,
+                    Student.last_name,
+                    Student.username,
+                    Course.title.label("course_title"),
+                    Enrollment.current_lesson_position,
+                )
+                .outerjoin(Enrollment, Enrollment.student_id == Student.id)
+                .outerjoin(Cohort, Cohort.id == Enrollment.cohort_id)
+                .outerjoin(Course, Course.id == Cohort.course_id)
+                .where(
+                    Student.origin == StudentOrigin.TELEGRAM,
+                    Student.telegram_user_id.is_not(None),
+                    Student.is_active.is_(True),
+                )
+                .order_by(Student.created_at.desc(), Enrollment.created_at.desc())
+                .limit(limit)
+            )
+            result: list[TelegramCourseGrantStudent] = []
+            seen: set[UUID] = set()
+            for row in rows:
+                if row.id in seen:
+                    continue
+                seen.add(row.id)
+                name = " ".join(
+                    item for item in (row.first_name, row.last_name) if item
+                ).strip()
+                result.append(
+                    TelegramCourseGrantStudent(
+                        student_id=row.id,
+                        name=name or row.username or "Telegram ученик",
+                        username=row.username,
+                        course_title=row.course_title,
+                        current_lesson_position=row.current_lesson_position,
+                    )
+                )
+            return tuple(result)
+
+    async def list_telegram_courses_for_grant(
+        self,
+        *,
+        limit: int = 12,
+    ) -> tuple[TelegramCourseGrantCourse, ...]:
+        lessons_count = (
+            select(func.count(Lesson.id))
+            .where(Lesson.course_id == Course.id, Lesson.is_published.is_(True))
+            .correlate(Course)
+            .scalar_subquery()
+        )
+        students_count = (
+            select(func.count(func.distinct(Enrollment.student_id)))
+            .join(Cohort, Cohort.id == Enrollment.cohort_id)
+            .where(Cohort.course_id == Course.id)
+            .correlate(Course)
+            .scalar_subquery()
+        )
+        async with self._session_factory() as session:
+            rows = await session.execute(
+                select(
+                    Course.id,
+                    Course.title,
+                    lessons_count.label("lessons_count"),
+                    students_count.label("students_count"),
+                )
+                .where(
+                    Course.audience == CourseAudience.TELEGRAM,
+                    Course.is_active.is_(True),
+                )
+                .order_by(Course.created_at.desc())
+                .limit(limit)
+            )
+            return tuple(
+                TelegramCourseGrantCourse(
+                    course_id=row.id,
+                    title=row.title,
+                    lessons_count=row.lessons_count or 0,
+                    students_count=row.students_count or 0,
+                )
+                for row in rows
+            )
+
+    async def grant_telegram_course(
+        self,
+        *,
+        student_id: UUID,
+        course_id: UUID,
+        access_type: AccessType = AccessType.MANUAL,
+    ) -> Any:
+        async with session_scope(self._session_factory) as session:
+            student = await session.get(Student, student_id)
+            course = await session.get(Course, course_id)
+            if student is None or student.origin is not StudentOrigin.TELEGRAM:
+                raise StudentAccessError("telegram-student-not-found")
+            if course is None or course.audience is not CourseAudience.TELEGRAM:
+                raise StudentAccessError("telegram-course-not-found")
+            cohort = await session.scalar(
+                select(Cohort)
+                .where(Cohort.course_id == course.id, Cohort.is_active.is_(True))
+                .order_by(Cohort.created_at)
+                .limit(1)
+            )
+            if cohort is None:
+                cohort = Cohort(
+                    course_id=course.id,
+                    title="Основной поток",
+                    is_active=True,
+                )
+                session.add(cohort)
+                await session.flush()
+            cohort_id = cohort.id
+
+        return await self.update_enrollment(
+            student_id=student_id,
+            cohort_id=cohort_id,
+            status=EnrollmentStatus.ACTIVE,
+            access_type=access_type,
+            current_lesson_position=1,
+        )
+
     async def assign_discord_course(self, *, student_id: UUID, course_id: UUID) -> Any:
         async with session_scope(self._session_factory) as session:
             student = await session.get(Student, student_id)
@@ -461,6 +605,7 @@ class StudentAccessService:
             )
 
             if enrollment is None:
+                should_notify_access = True
                 enrollment = Enrollment(
                     student_id=student.id,
                     cohort_id=cohort.id,
@@ -470,11 +615,21 @@ class StudentAccessService:
                 )
                 session.add(enrollment)
             else:
+                should_notify_access = (
+                    enrollment.cohort_id != cohort.id
+                    or enrollment.status is not EnrollmentStatus.ACTIVE
+                )
                 enrollment.cohort_id = cohort.id
                 enrollment.status = status
                 enrollment.access_type = access_type
                 if current_lesson_position is not None:
                     enrollment.current_lesson_position = current_lesson_position
+            if (
+                should_notify_access
+                and status is EnrollmentStatus.ACTIVE
+                and student.origin is StudentOrigin.TELEGRAM
+            ):
+                enrollment.access_notified_at = None
 
         dashboard = AdminDashboardService(self._session_factory)
         detail: Any = await dashboard.get_student_detail(

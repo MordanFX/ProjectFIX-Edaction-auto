@@ -1,9 +1,9 @@
-"""Reusable Telegram keyboard and feedback message formatting."""
+"""Reusable Telegram keyboard and notification message formatting."""
 
 from html import escape
 
 from course_platform.models.enums import FeedbackVerdict
-from course_platform.services.notifications import FeedbackNotification
+from course_platform.services.notifications import AccessNotification, FeedbackNotification
 from course_platform.services.students import StudentJourney, StudentStage
 
 
@@ -24,16 +24,16 @@ def stage_keyboard(
     if stage is StudentStage.COURSE_COMPLETED:
         rows = [[{"text": "🏆 Итоги курса"}, {"text": "📚 База материалов"}]]
     elif stage is StudentStage.AWAITING_REVIEW:
-        rows = [[{"text": "⏳ Статус работы"}, {"text": "▶ Продолжить"}]]
+        rows = [[{"text": "⏳ Статус ДЗ"}, {"text": "📘 Текущий урок"}]]
     elif stage is StudentStage.REVISION_REQUESTED:
-        rows = [[{"text": "↻ Отправить доработку"}, {"text": "▶ Продолжить"}]]
+        rows = [[{"text": "🔄 Отправить доработку"}, {"text": "📘 Текущий урок"}]]
     elif stage is StudentStage.READY_TO_SUBMIT:
-        rows = [[{"text": "📥 Сдать работу"}, {"text": "▶ Продолжить"}]]
+        rows = [[{"text": "📥 Сдать ДЗ"}, {"text": "📘 Текущий урок"}]]
     else:
-        rows = [[{"text": "▶ Продолжить"}, {"text": "▦ Мой прогресс"}]]
+        rows = [[{"text": "📘 Текущий урок"}, {"text": "📊 Мой прогресс"}]]
 
-    rows.append([{"text": "▤ Программа курса"}, {"text": "▣ Мои разборы"}])
-    rows.append([{"text": "⚙ Настройки"}, {"text": "? Помощь"}])
+    rows.append([{"text": "📚 Программа курса"}, {"text": "🗂 Мои разборы"}])
+    rows.append([{"text": "⚙️ Настройки"}, {"text": "ℹ️ Помощь"}])
     if is_reviewer:
         rows.append([{"text": "Режим куратора"}])
     return {
@@ -49,6 +49,7 @@ BOT_KEYBOARD = main_keyboard(None)
 def curator_keyboard() -> dict[str, object]:
     return {
         "keyboard": [
+            [{"text": "🎓 Выдать доступ"}],
             [{"text": "🎬 Видео уроков"}],
             [{"text": "📥 Очередь проверки"}, {"text": "🗂 Проверенные"}],
             [{"text": "📊 Сводка куратора"}, {"text": "👥 Ученики"}],
@@ -62,19 +63,29 @@ def curator_keyboard() -> dict[str, object]:
 def feedback_notification_text(notification: FeedbackNotification) -> str:
     if notification.verdict is FeedbackVerdict.REVISION_REQUESTED:
         return (
-            "🔄 <b>ДЗ НУЖНО ДОРАБОТАТЬ</b>\n\n"
-            f"💬 {escape(notification.message)}\n\n"
+            "🔄 <b>ДЗ нужно доработать</b>\n\n"
+            f"Комментарий куратора:\n{escape(notification.message)}\n\n"
             "Исправь работу и нажми «🔄 Отправить доработку»."
         )
     if notification.course_completed:
         return (
-            "🏆 <b>ДЗ ПРИНЯТО</b>\n\n"
-            f"💬 {escape(notification.message)}\n\n"
-            "Курс завершён. Все уроки пройдены!"
+            "🏆 <b>ДЗ принято</b>\n\n"
+            f"Комментарий куратора:\n{escape(notification.message)}\n\n"
+            "Курс завершён. Все обязательные уроки пройдены."
         )
     return (
-        "✅ <b>ДЗ ПРИНЯТО</b>\n\n"
-        f"💬 {escape(notification.message)}\n\n"
+        "✅ <b>ДЗ принято</b>\n\n"
+        f"Комментарий куратора:\n{escape(notification.message)}\n\n"
         f"Открыт урок {notification.current_lesson_position}. "
-        "Нажми «📘 Открыть урок», чтобы продолжить."
+        "Нажми «📘 Текущий урок», чтобы продолжить обучение."
+    )
+
+
+def access_notification_text(notification: AccessNotification) -> str:
+    return (
+        "✅ <b>Доступ к курсу открыт</b>\n\n"
+        f"Курс: <b>{escape(notification.course_title)}</b>\n"
+        f"Стартовый урок: <b>{notification.current_lesson_position}</b>\n\n"
+        "Нажми «📘 Текущий урок», чтобы начать обучение. "
+        "Внутри урока будут материалы, статус просмотра и кнопка сдачи ДЗ, если задание есть."
     )

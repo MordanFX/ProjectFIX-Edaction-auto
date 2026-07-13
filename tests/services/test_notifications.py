@@ -4,9 +4,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_platform.dev.seed_demo import seed_demo_data
-from course_platform.models import Feedback, StaffUser, Submission
-from course_platform.models.enums import FeedbackVerdict, NotificationStatus
-from course_platform.services.notifications import FeedbackNotificationService
+from course_platform.models import Cohort, Course, Enrollment, Feedback, StaffUser, Submission
+from course_platform.models.enums import (
+    CourseAudience,
+    EnrollmentStatus,
+    FeedbackVerdict,
+    NotificationStatus,
+)
+from course_platform.services.notifications import (
+    AccessNotificationService,
+    FeedbackNotificationService,
+)
 from course_platform.services.progression import ProgressionService
 from course_platform.services.reviews import ReviewService
 from course_platform.services.students import StudentRegistration, StudentService
@@ -68,3 +76,41 @@ async def test_feedback_is_retried_then_marked_sent(
     assert stored_feedback.notification_attempts == 2
     assert stored_feedback.notified_at is not None
     assert stored_feedback.notification_error is None
+
+
+async def test_access_notification_is_marked_sent_once(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    registration = await StudentService(session_factory).register(
+        StudentRegistration(telegram_user_id=202, first_name="Student")
+    )
+    async with session_factory() as session:
+        course = Course(
+            slug="practice-access",
+            title="Practice",
+            description=None,
+            audience=CourseAudience.TELEGRAM,
+            is_active=True,
+        )
+        cohort = Cohort(course=course, title="Main")
+        enrollment = Enrollment(
+            student_id=registration.student_id,
+            cohort=cohort,
+            status=EnrollmentStatus.ACTIVE,
+            current_lesson_position=1,
+        )
+        session.add_all([course, cohort, enrollment])
+        await session.commit()
+        enrollment_id = enrollment.id
+
+    notifications = AccessNotificationService(session_factory)
+
+    pending = await notifications.list_pending()
+    assert len(pending) == 1
+    assert pending[0].enrollment_id == enrollment_id
+    assert pending[0].student_telegram_user_id == 202
+    assert pending[0].course_title == "Practice"
+
+    await notifications.mark_sent(enrollment_id)
+
+    assert await notifications.list_pending() == []
