@@ -535,6 +535,29 @@ class MessageRouter:
                 )
             return True
 
+        lesson = await self._learning.get_available_lesson(callback.sender.id, lesson_id)
+        if lesson is None:
+            await self._api.answer_callback_query(
+                callback.id,
+                text="Урок сейчас недоступен",
+                show_alert=True,
+            )
+            return True
+
+        if lesson.materials:
+            viewed_count = sum(material.is_viewed for material in lesson.materials)
+            total_count = len(lesson.materials)
+            if viewed_count < total_count:
+                await self._api.answer_callback_query(
+                    callback.id,
+                    text=(
+                        "Сначала отметь все материалы урока. "
+                        f"Сейчас отмечено {viewed_count}/{total_count}."
+                    ),
+                    show_alert=True,
+                )
+                return True
+
         try:
             result = await self._progression.mark_current_viewed(
                 callback.sender.id,
@@ -554,7 +577,7 @@ class MessageRouter:
             )
             return True
 
-        await self._api.answer_callback_query(callback.id, text="Просмотр отмечен")
+        await self._api.answer_callback_query(callback.id, text="Урок отмечен")
         if callback.message is not None:
             await self._api.edit_message_reply_markup(
                 callback.message.chat.id,
@@ -1556,7 +1579,7 @@ class MessageRouter:
         parts.append(video_text)
         if lesson.assignment_instructions:
             action_hint = (
-                "Сначала посмотри материал и нажми «✅ Я посмотрел урок»."
+                "Сначала посмотри материал и нажми «✅ Я посмотрел материал»."
                 if lesson.requires_view_confirmation and lesson.viewed_at is None
                 else "Когда ответ будет готов, нажми «📤 Сдать ДЗ»."
             )
@@ -1565,36 +1588,55 @@ class MessageRouter:
                 f"{escape(lesson.assignment_instructions)}\n\n"
                 f"{action_hint}"
             )
+        else:
+            parts.append(
+                "📝 <b>Домашнее задание:</b> нет\n"
+                "Сдавать ничего не нужно. После просмотра отметь материал."
+            )
 
         return "\n\n".join(parts)
 
     async def _send_lesson_workspace(self, chat_id: int, lesson: CurrentLesson) -> None:
         status = "просмотрен" if lesson.viewed_at is not None else "нужно посмотреть"
-        homework = "есть ДЗ" if lesson.assignment_instructions else "без ДЗ"
         viewed_count = sum(material.is_viewed for material in lesson.materials)
-        progress_bar = "■" * viewed_count + "□" * (len(lesson.materials) - viewed_count)
+        material_count = len(lesson.materials)
+        progress_bar = "■" * viewed_count + "□" * (material_count - viewed_count)
         video_count = sum(material.kind == "video" for material in lesson.materials)
         image_count = sum(material.kind == "image" for material in lesson.materials)
         material_summary = f"🎬 видео: {video_count}"
         if image_count:
             material_summary += f" · 🖼 изображения: {image_count}"
-        description = escape(lesson.description or "Описание урока скоро появится.")
-        next_step = (
-            "Следующий шаг: посмотри материалы, затем нажми «✅ Я посмотрел урок»."
-            if lesson.viewed_at is None
-            else (
-                "Следующий шаг: нажми «📥 Сдать ДЗ», когда ответ будет готов."
-                if lesson.assignment_instructions
-                else "Урок просмотрен. Можно перейти к следующему доступному уроку."
-            )
+        homework_text = (
+            "📝 <b>Домашнее задание:</b> есть\n"
+            "Откроется после просмотра всех материалов урока."
+            if lesson.assignment_instructions
+            else "📝 <b>Домашнее задание:</b> нет\n"
+            "Сдавать ничего не нужно. Достаточно посмотреть материалы урока."
         )
+        description = escape(lesson.description or "Описание урока скоро появится.")
+        if lesson.viewed_at is None:
+            if viewed_count < material_count:
+                next_step = (
+                    "Шаг 1: открой материалы ниже и отметь просмотр каждого. "
+                    f"Сейчас отмечено {viewed_count}/{material_count}."
+                )
+            else:
+                next_step = (
+                    "Шаг 2: все материалы отмечены. Нажми "
+                    "«✅ Я посмотрел все материалы», чтобы завершить урок."
+                )
+        elif lesson.assignment_instructions:
+            next_step = "Шаг 3: открой «📝 Домашнее задание» и сдай ответ."
+        else:
+            next_step = "Урок завершён. ДЗ в этом уроке нет."
         caption = (
             f"📘 <b>Урок {lesson.position} из {lesson.total_lessons}</b>\n"
             f"Курс: <b>{escape(lesson.course_title)}</b>\n\n"
             f"<b>{escape(lesson.title)}</b>\n"
-            f"{material_summary} · 📝 {homework}\n"
+            f"{material_summary}\n"
             f"Статус: <b>{status}</b>\n"
-            f"Прогресс материалов: {progress_bar} {viewed_count}/{len(lesson.materials)}\n\n"
+            f"Прогресс материалов: {progress_bar} {viewed_count}/{material_count}\n"
+            f"{homework_text}\n\n"
             f"{description}\n\n"
             f"<i>{escape(next_step)}</i>"
         )
@@ -1617,7 +1659,7 @@ class MessageRouter:
             rows.append(
                 [
                     {
-                        "text": "📝 Задание недели",
+                        "text": "📝 Домашнее задание",
                         "callback_data": f"homework:{lesson.lesson_id}",
                     }
                 ]
@@ -1634,7 +1676,7 @@ class MessageRouter:
             rows.append(
                 [
                     {
-                        "text": "✅ Я посмотрел урок",
+                        "text": "✅ Я посмотрел все материалы",
                         "callback_data": f"lesson:viewed:{lesson.lesson_id}",
                     }
                 ]
@@ -1691,9 +1733,9 @@ class MessageRouter:
             f"\n\n{escape(material.description)}" if material.description else ""
         )
         caption = (
-            f"<b>PROJECT FIX / {lesson.position:02d}.{material.position:02d}</b>\n"
-            f"{'CHART' if material.kind == 'image' else 'VIDEO'} / MATERIAL "
-            f"{material.position} OF {len(lesson.materials)}\n\n"
+            f"{'🖼' if material.kind == 'image' else '🎬'} "
+            f"<b>Материал {material.position} из {len(lesson.materials)}</b>\n"
+            f"Урок {lesson.position}: <b>{escape(lesson.title)}</b>\n\n"
             f"<b>{escape(material.title)}</b>{description}"
         )
         rows: list[list[dict[str, object]]] = []
@@ -1703,7 +1745,7 @@ class MessageRouter:
             rows.append(
                 [
                     {
-                        "text": "✓ Отметить просмотр",
+                        "text": "✅ Я посмотрел этот материал",
                         "callback_data": (
                             f"matview:{lesson.lesson_id}:{material.position}"
                         ),
@@ -1713,7 +1755,7 @@ class MessageRouter:
         rows.append(
             [
                 {
-                    "text": "← Содержание недели",
+                    "text": "← К уроку",
                     "callback_data": f"lesson:open:{lesson.lesson_id}",
                 }
             ]
@@ -1829,7 +1871,7 @@ class MessageRouter:
                     ],
                     [
                         {
-                            "text": "← Содержание недели",
+                            "text": "← К уроку",
                             "callback_data": f"lesson:open:{lesson.lesson_id}",
                         }
                     ]
@@ -1909,7 +1951,7 @@ class MessageRouter:
                     ],
                     [
                         {
-                            "text": "← Содержание недели",
+                            "text": "← К уроку",
                             "callback_data": f"lesson:open:{lesson.lesson_id}",
                         }
                     ],
@@ -1945,8 +1987,9 @@ class MessageRouter:
             return "✅ <b>Это ДЗ уже принято</b>\n\nПовторная отправка не требуется."
         except LessonNotViewedError:
             return (
-                "👀 <b>Сначала отметь просмотр урока</b>\n\n"
-                "Открой «📘 Текущий урок» и нажми «✅ Я посмотрел урок»."
+                "👀 <b>Сначала отметь просмотр материалов</b>\n\n"
+                "Открой «📘 Текущий урок», посмотри материалы и нажми "
+                "«✅ Я посмотрел все материалы»."
             )
         return self._submission_prompt_text(prompt)
 
@@ -1965,7 +2008,7 @@ class MessageRouter:
         rows.append(
             [
                 {
-                    "text": "✅ Я посмотрел урок",
+                    "text": "✅ Я посмотрел материал",
                     "callback_data": f"lesson:viewed:{lesson.lesson_id}",
                 }
             ]
@@ -2031,8 +2074,9 @@ class MessageRouter:
                 "Следующий урок откроется по расписанию."
             )
         return (
-            "✅ <b>ПРОСМОТР ОТМЕЧЕН</b>\n\n"
-            "Теперь можно переходить к домашнему заданию."
+            "✅ <b>МАТЕРИАЛЫ ОТМЕЧЕНЫ</b>\n\n"
+            "Если в уроке есть ДЗ — открой его в карточке урока. "
+            "Если ДЗ нет — переходи к следующему доступному уроку."
         )
 
     async def _accept_text_submission(self, telegram_user_id: int, text: str) -> str:

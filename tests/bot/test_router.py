@@ -473,6 +473,7 @@ async def test_multi_video_lesson_opens_workspace_then_selected_material(
             AdminDashboardService(session_factory),
         )
         await router.handle(message_update("/lesson"))
+        await router.handle(review_callback_update(f"lesson:viewed:{lesson_id}"))
         await router.handle(review_callback_update(f"material:{lesson_id}:2"))
         await router.handle(review_callback_update(f"matview:{lesson_id}:2"))
         await router.handle(review_callback_update(f"template:{lesson_id}"))
@@ -486,7 +487,13 @@ async def test_multi_video_lesson_opens_workspace_then_selected_material(
         f"material:{lesson_id}:2"
     )
     assert any(
-        method == "sendMessage" and "01.02" in str(payload.get("text"))
+        method == "answerCallbackQuery"
+        and payload.get("show_alert") is True
+        and "0/2" in str(payload.get("text"))
+        for method, payload in api_calls
+    )
+    assert any(
+        method == "sendMessage" and "Материал 2 из 2" in str(payload.get("text"))
         for method, payload in api_calls
     )
     assert any(
@@ -545,13 +552,13 @@ async def test_viewed_callback_updates_lesson_and_unlocks_homework(
     assert any(method == "answerCallbackQuery" for method, _ in api_calls)
     assert any(method == "editMessageReplyMarkup" for method, _ in api_calls)
     assert any(
-        method == "sendMessage" and "ПРОСМОТР ОТМЕЧЕН" in str(payload["text"])
+        method == "sendMessage" and "МАТЕРИАЛЫ ОТМЕЧЕНЫ" in str(payload["text"])
         for method, payload in api_calls
     )
     viewed_message = next(
         payload
         for method, payload in api_calls
-        if method == "sendMessage" and "ПРОСМОТР ОТМЕЧЕН" in str(payload["text"])
+        if method == "sendMessage" and "МАТЕРИАЛЫ ОТМЕЧЕНЫ" in str(payload["text"])
     )
     button_labels = {
         button["text"]
