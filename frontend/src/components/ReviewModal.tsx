@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import {
   APIError,
   getAttachmentPlayback,
+  getFeedbackAttachmentPlayback,
   getReviewDetail,
 } from "../api";
 import type {
@@ -21,12 +22,14 @@ interface ReviewModalProps {
     item: ReviewQueueItem,
     verdict: ReviewVerdict,
     message: string,
+    attachment?: File | null,
   ) => Promise<void>;
 }
 
 export function ReviewModal({ item, onClose, onDecision }: ReviewModalProps) {
   const [detail, setDetail] = useState<ReviewDetail | null>(null);
   const [comment, setComment] = useState("");
+  const [feedbackFile, setFeedbackFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyVerdict, setBusyVerdict] = useState<ReviewVerdict | null>(null);
   const isReviewed = item.status === "accepted" || item.status === "revision_requested";
@@ -53,14 +56,14 @@ export function ReviewModal({ item, onClose, onDecision }: ReviewModalProps) {
 
   async function decide(verdict: ReviewVerdict) {
     const normalizedComment = comment.trim();
-    if (!normalizedComment) {
-      setError("Добавь комментарий ученику");
+    if (!normalizedComment && !feedbackFile) {
+      setError("Добавь комментарий или прикрепи файл для ученика");
       return;
     }
     setBusyVerdict(verdict);
     setError(null);
     try {
-      await onDecision(item, verdict, normalizedComment);
+      await onDecision(item, verdict, normalizedComment, feedbackFile);
       onClose();
     } catch (caughtError) {
       setError(
@@ -172,6 +175,26 @@ export function ReviewModal({ item, onClose, onDecision }: ReviewModalProps) {
             </section>
           )}
 
+          {detail && detail.feedback_attachments.length > 0 && (
+            <section className="attachments-panel attachments-panel--feedback">
+              <div className="attachments-panel__heading">
+                <span>Вложения куратора</span>
+                <small>Фото или файлы, приложенные к решению</small>
+              </div>
+              <div className="attachment-list">
+                {detail.feedback_attachments.map((attachment) => (
+                  <AttachmentCard
+                    key={attachment.id}
+                    submissionId={detail.submission_id}
+                    attachment={attachment}
+                    source={detail.source}
+                    owner="curator"
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
           {(detail === null || detail.attachments.length > 0) && (
             <section className="attachments-panel">
               <div className="attachments-panel__heading">
@@ -192,6 +215,7 @@ export function ReviewModal({ item, onClose, onDecision }: ReviewModalProps) {
                       submissionId={detail.submission_id}
                       attachment={attachment}
                       source={detail.source}
+                      owner="student"
                     />
                   ))}
                 </div>
@@ -220,6 +244,21 @@ export function ReviewModal({ item, onClose, onDecision }: ReviewModalProps) {
                   placeholder="Что получилось и что нужно исправить?"
                   rows={4}
                 />
+              </label>
+              <label className="feedback-upload-field">
+                <span>Файл к ответу — необязательно</span>
+                <input
+                  type="file"
+                  accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+                  onChange={(event) => {
+                    setFeedbackFile(event.target.files?.[0] ?? null);
+                  }}
+                />
+                <small>
+                  {feedbackFile
+                    ? `Выбран файл: ${feedbackFile.name}`
+                    : "Можно приложить фото с пометками, PDF или другой файл."}
+                </small>
               </label>
               {error && <div className="review-modal__error form-error">{error}</div>}
               <div className="review-actions">
@@ -260,10 +299,12 @@ function AttachmentCard({
   submissionId,
   attachment,
   source,
+  owner = "student",
 }: {
   submissionId: string;
   attachment: ReviewAttachment;
   source: ReviewQueueItem["source"];
+  owner?: "student" | "curator";
 }) {
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -279,20 +320,26 @@ function AttachmentCard({
     setIsLoading(true);
     setError(null);
     setImageFailed(false);
-    getAttachmentPlayback(submissionId, attachment.id)
+    const loadPlayback = owner === "curator"
+      ? getFeedbackAttachmentPlayback
+      : getAttachmentPlayback;
+    loadPlayback(submissionId, attachment.id)
       .then((playback) => active && setPlaybackUrl(playback.url))
       .catch((caughtError) => active && setError(
         caughtError instanceof APIError ? caughtError.message : "Изображение временно недоступно",
       ))
       .finally(() => active && setIsLoading(false));
     return () => { active = false; };
-  }, [attachment.id, attachment.source_available, isPhoto, submissionId]);
+  }, [attachment.id, attachment.source_available, isPhoto, owner, submissionId]);
 
   async function openVideo() {
     setIsLoading(true);
     setError(null);
     try {
-      const playback = await getAttachmentPlayback(submissionId, attachment.id);
+      const loadPlayback = owner === "curator"
+        ? getFeedbackAttachmentPlayback
+        : getAttachmentPlayback;
+      const playback = await loadPlayback(submissionId, attachment.id);
       setPlaybackUrl(playback.url);
     } catch (caughtError) {
       setError(
@@ -393,6 +440,7 @@ function fallbackDetail(item: ReviewQueueItem): ReviewDetail {
     feedback_message: null,
     reviewer_name: null,
     attachments: [],
+    feedback_attachments: [],
     previous_attempts: [],
   };
 }
@@ -407,8 +455,9 @@ function PreviousAttemptCard({ attempt }: { attempt: ReviewAttempt }) {
     </button>
     {open && <div className="attempt-history__content">
       <section><span>Ответ ученика</span><p><LinkifiedText text={attempt.text_body || "Текстового ответа нет — работа приложена файлом."} /></p></section>
-      {attempt.attachments.length > 0 && <div className="attachment-list">{attempt.attachments.map((attachment) => <AttachmentCard key={attachment.id} submissionId={attempt.submission_id} attachment={attachment} source={attempt.source} />)}</div>}
+      {attempt.attachments.length > 0 && <div className="attachment-list">{attempt.attachments.map((attachment) => <AttachmentCard key={attachment.id} submissionId={attempt.submission_id} attachment={attachment} source={attempt.source} owner="student" />)}</div>}
       {attempt.feedback_message && <section className="attempt-history__feedback"><span>Комментарий куратора</span><strong>{attempt.feedback_verdict === "accepted" ? "Работа принята" : "Отправлено на доработку"}</strong><p>{attempt.feedback_message}</p>{attempt.reviewer_name && <small>{attempt.reviewer_name}</small>}</section>}
+      {attempt.feedback_attachments.length > 0 && <div className="attachment-list">{attempt.feedback_attachments.map((attachment) => <AttachmentCard key={attachment.id} submissionId={attempt.submission_id} attachment={attachment} source={attempt.source} owner="curator" />)}</div>}
     </div>}
   </article>;
 }

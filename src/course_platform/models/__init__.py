@@ -16,7 +16,12 @@ from course_platform.models.progress import LessonMaterialProgress, LessonProgre
 from course_platform.models.reminder import CourseReminderStep, LessonReminder
 from course_platform.models.staff import StaffBotState, StaffUser
 from course_platform.models.student import Enrollment, Student, StudentBotState
-from course_platform.models.submission import Feedback, Submission, SubmissionAttachment
+from course_platform.models.submission import (
+    Feedback,
+    FeedbackAttachment,
+    Submission,
+    SubmissionAttachment,
+)
 
 __all__ = [
     "Assignment",
@@ -32,6 +37,7 @@ __all__ = [
     "DiscordStudentLink",
     "Enrollment",
     "Feedback",
+    "FeedbackAttachment",
     "Lesson",
     "LessonMaterial",
     "LessonProgress",

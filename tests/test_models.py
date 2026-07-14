@@ -10,6 +10,7 @@ from course_platform.models import (
     Course,
     Enrollment,
     Feedback,
+    FeedbackAttachment,
     Lesson,
     StaffUser,
     Student,
@@ -38,6 +39,7 @@ def test_expected_tables_are_registered() -> None:
             "discord_student_links",
         "enrollments",
         "feedback",
+        "feedback_attachments",
         "lessons",
         "lesson_progress",
         "lesson_materials",
@@ -91,6 +93,13 @@ async def test_learning_workflow_can_be_persisted(
             reviewer=curator,
             verdict=FeedbackVerdict.ACCEPTED,
             message="Accepted",
+        )
+        submission.feedback.attachments.append(
+            FeedbackAttachment(
+                kind=AttachmentKind.PHOTO,
+                telegram_file_id="feedback-file-id",
+                telegram_file_unique_id="feedback-stable-file-id",
+            )
         )
         submission.status = SubmissionStatus.ACCEPTED
         session.add(submission)

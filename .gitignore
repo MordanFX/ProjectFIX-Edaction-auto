@@ -9,6 +9,7 @@ htmlcov/
 .ruff_cache/
 .local/
 .runtime/
+data/
 
 # Virtual environments
 .venv/

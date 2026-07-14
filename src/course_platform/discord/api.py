@@ -1,5 +1,8 @@
 """Small direct async Discord REST client."""
 
+import json
+from asyncio import to_thread
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -68,6 +71,37 @@ class DiscordAPIClient:
         self, channel_id: int, payload: dict[str, Any]
     ) -> dict[str, Any]:
         return await self.request("POST", f"channels/{channel_id}/messages", json=payload)
+
+    async def send_channel_message_file(
+        self,
+        channel_id: int,
+        payload: dict[str, Any],
+        path: Path,
+        *,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            content = await to_thread(path.read_bytes)
+            response = await self._client.post(
+                f"channels/{channel_id}/messages",
+                data={"payload_json": json.dumps(payload, ensure_ascii=False)},
+                files={
+                    "files[0]": (
+                        file_name or path.name,
+                        content,
+                        mime_type or "application/octet-stream",
+                    )
+                },
+            )
+        except (OSError, httpx.HTTPError):
+            raise DiscordAPIError("Discord file upload failed") from None
+        if response.status_code >= 400:
+            raise DiscordAPIError(
+                f"Discord API returned {response.status_code}: {response.text[:300]}",
+                status_code=response.status_code,
+            )
+        return response.json()
 
     async def edit_channel_message(
         self, channel_id: int, message_id: int, payload: dict[str, Any]

@@ -55,6 +55,7 @@ export interface ReviewDetail extends ReviewQueueItem {
   feedback_message: string | null;
   reviewer_name: string | null;
   attachments: ReviewAttachment[];
+  feedback_attachments: ReviewAttachment[];
   previous_attempts: ReviewAttempt[];
 }
 
@@ -70,6 +71,7 @@ export interface ReviewAttempt {
   feedback_message: string | null;
   reviewer_name: string | null;
   attachments: ReviewAttachment[];
+  feedback_attachments: ReviewAttachment[];
 }
 
 export interface AttachmentPlayback {

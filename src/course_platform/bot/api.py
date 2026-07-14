@@ -219,6 +219,7 @@ class TelegramBotClient:
         path: Path,
         *,
         caption: str | None = None,
+        mime_type: str = "image/png",
         parse_mode: str | None = None,
         reply_markup: dict[str, Any] | None = None,
     ) -> TelegramMessage:
@@ -236,10 +237,56 @@ class TelegramBotClient:
             response = await self._client.post(
                 "sendPhoto",
                 data=data,
-                files={"photo": (path.name, content, "image/png")},
+                files={"photo": (path.name, content, mime_type)},
             )
         except (OSError, httpx.HTTPError):
             raise TelegramTransportError("Telegram photo upload failed") from None
+        try:
+            response_data = response.json()
+        except ValueError:
+            raise TelegramTransportError("Telegram API returned invalid JSON") from None
+        if not isinstance(response_data, dict) or not response_data.get("ok"):
+            description = (
+                response_data.get("description")
+                if isinstance(response_data, dict)
+                else None
+            )
+            raise TelegramAPIError(
+                description if isinstance(description, str) else "Telegram API request failed"
+            )
+        try:
+            return TelegramMessage.model_validate(response_data.get("result"))
+        except ValidationError:
+            raise TelegramTransportError("Telegram API returned invalid message data") from None
+
+    async def send_document_file(
+        self,
+        chat_id: int,
+        path: Path,
+        *,
+        caption: str | None = None,
+        mime_type: str = "application/octet-stream",
+        parse_mode: str | None = None,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> TelegramMessage:
+        """Upload a local file to Telegram using multipart form data."""
+
+        try:
+            content = await asyncio.to_thread(path.read_bytes)
+            data: dict[str, str] = {"chat_id": str(chat_id)}
+            if caption is not None:
+                data["caption"] = caption
+            if parse_mode is not None:
+                data["parse_mode"] = parse_mode
+            if reply_markup is not None:
+                data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+            response = await self._client.post(
+                "sendDocument",
+                data=data,
+                files={"document": (path.name, content, mime_type)},
+            )
+        except (OSError, httpx.HTTPError):
+            raise TelegramTransportError("Telegram document upload failed") from None
         try:
             response_data = response.json()
         except ValueError:

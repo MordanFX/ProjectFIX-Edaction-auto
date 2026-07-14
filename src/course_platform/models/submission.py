@@ -161,3 +161,38 @@ class Feedback(PrimaryKeyMixin, TimestampMixin, Base):
 
     submission: Mapped[Submission] = relationship(back_populates="feedback")
     reviewer: Mapped[StaffUser] = relationship(back_populates="feedback_items")
+    attachments: Mapped[list[FeedbackAttachment]] = relationship(
+        back_populates="feedback", cascade="all, delete-orphan"
+    )
+
+
+class FeedbackAttachment(PrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "feedback_attachments"
+
+    feedback_id: Mapped[UUID] = mapped_column(
+        ForeignKey("feedback.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[AttachmentKind] = mapped_column(
+        Enum(
+            AttachmentKind,
+            name="feedback_attachment_kind",
+            native_enum=False,
+            length=32,
+            values_callable=enum_values,
+        )
+    )
+    telegram_file_id: Mapped[str | None] = mapped_column(String(512))
+    telegram_file_unique_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    discord_attachment_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    external_url: Mapped[str | None] = mapped_column(Text)
+    local_path: Mapped[str | None] = mapped_column(Text)
+    source_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    source_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    file_name: Mapped[str | None] = mapped_column(String(512))
+    mime_type: Mapped[str | None] = mapped_column(String(255))
+    file_size: Mapped[int | None] = mapped_column(BigInteger)
+    duration_seconds: Mapped[int | None]
+    width: Mapped[int | None]
+    height: Mapped[int | None]
+
+    feedback: Mapped[Feedback] = relationship(back_populates="attachments")

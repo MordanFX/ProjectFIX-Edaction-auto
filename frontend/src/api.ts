@@ -43,7 +43,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  if (init.body && !(init.body instanceof URLSearchParams)) {
+  if (
+    init.body
+    && !(init.body instanceof URLSearchParams)
+    && !(init.body instanceof FormData)
+  ) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -108,6 +112,16 @@ export function getAttachmentPlayback(
 ): Promise<AttachmentPlayback> {
   return request<AttachmentPlayback>(
     `/api/reviews/${submissionId}/attachments/${attachmentId}/playback`,
+    { method: "POST" },
+  );
+}
+
+export function getFeedbackAttachmentPlayback(
+  submissionId: string,
+  attachmentId: string,
+): Promise<AttachmentPlayback> {
+  return request<AttachmentPlayback>(
+    `/api/reviews/${submissionId}/feedback-attachments/${attachmentId}/playback`,
     { method: "POST" },
   );
 }
@@ -315,7 +329,18 @@ export function decideReview(
   submissionId: string,
   verdict: ReviewVerdict,
   message: string,
+  attachment?: File | null,
 ): Promise<ReviewDecision> {
+  if (attachment) {
+    const form = new FormData();
+    form.set("verdict", verdict);
+    form.set("message", message);
+    form.set("attachment", attachment);
+    return request<ReviewDecision>(`/api/reviews/${submissionId}/decision-with-attachment`, {
+      method: "POST",
+      body: form,
+    });
+  }
   return request<ReviewDecision>(`/api/reviews/${submissionId}/decision`, {
     method: "POST",
     body: JSON.stringify({ verdict, message }),

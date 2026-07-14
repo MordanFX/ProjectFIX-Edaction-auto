@@ -135,9 +135,10 @@ export function App() {
     item: ReviewQueueItem,
     verdict: ReviewVerdict,
     message: string,
+    attachment?: File | null,
   ) {
     try {
-      await decideReview(item.submission_id, verdict, message);
+      await decideReview(item.submission_id, verdict, message, attachment);
       await loadDashboard();
       showNotice(
         verdict === "accepted"

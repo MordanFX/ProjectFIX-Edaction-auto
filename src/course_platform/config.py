@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     discord_message_content_enabled: bool = False
     jwt_secret: SecretStr | None = None
     jwt_access_token_expire_minutes: int = 60
+    feedback_upload_dir: str = "data/feedback_uploads"
 
     @field_validator("discord_staff_role_ids", mode="before")
     @classmethod

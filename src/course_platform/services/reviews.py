@@ -13,6 +13,7 @@ from course_platform.models import (
     Course,
     Enrollment,
     Feedback,
+    FeedbackAttachment,
     Lesson,
     StaffBotState,
     StaffUser,
@@ -109,8 +110,47 @@ def _review_attachment(attachment: SubmissionAttachment) -> ReviewAttachment:
                 and attachment.source_message_id is not None
             )
             or attachment.external_url is not None
+            or attachment.local_path is not None
         ),
     )
+
+
+def _feedback_review_attachment(attachment: FeedbackAttachment) -> ReviewAttachment:
+    return ReviewAttachment(
+        id=attachment.id,
+        kind=attachment.kind,
+        file_name=attachment.file_name,
+        mime_type=attachment.mime_type,
+        file_size=attachment.file_size,
+        duration_seconds=attachment.duration_seconds,
+        width=attachment.width,
+        height=attachment.height,
+        source_available=(
+            (
+                attachment.source_chat_id is not None
+                and attachment.source_message_id is not None
+            )
+            or attachment.external_url is not None
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackAttachmentInput:
+    kind: AttachmentKind
+    telegram_file_id: str | None = None
+    telegram_file_unique_id: str | None = None
+    discord_attachment_id: int | None = None
+    external_url: str | None = None
+    local_path: str | None = None
+    source_chat_id: int | None = None
+    source_message_id: int | None = None
+    file_name: str | None = None
+    mime_type: str | None = None
+    file_size: int | None = None
+    duration_seconds: int | None = None
+    width: int | None = None
+    height: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +160,7 @@ class AttachmentMediaSource:
     kind: AttachmentKind
     telegram_file_id: str | None
     external_url: str | None
+    local_path: str | None
     file_name: str | None
     mime_type: str | None
     file_size: int | None
@@ -155,6 +196,7 @@ class ReviewDetail(ReviewQueueItem):
     feedback_message: str | None
     reviewer_name: str | None
     attachments: tuple[ReviewAttachment, ...]
+    feedback_attachments: tuple[ReviewAttachment, ...]
     previous_attempts: tuple["ReviewAttempt", ...]
 
 
@@ -171,6 +213,7 @@ class ReviewAttempt:
     feedback_message: str | None
     reviewer_name: str | None
     attachments: tuple[ReviewAttachment, ...]
+    feedback_attachments: tuple[ReviewAttachment, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +222,7 @@ class ReviewResult:
     student_telegram_user_id: int | None
     verdict: FeedbackVerdict
     feedback_message: str
+    feedback_attachment_count: int
     current_lesson_position: int
     course_completed: bool
 
@@ -422,6 +466,7 @@ class ReviewService:
         *,
         reviewer_telegram_user_id: int,
         message: str,
+        attachments: tuple[FeedbackAttachmentInput, ...] = (),
     ) -> TelegramReviewCompletion:
         pending = await self.get_pending_telegram_feedback(reviewer_telegram_user_id)
         if pending is None:
@@ -431,6 +476,7 @@ class ReviewService:
             reviewer_id=pending.reviewer_id,
             verdict=pending.verdict,
             message=message,
+            attachments=attachments,
         )
         async with session_scope(self._session_factory) as session:
             state = await session.get(StaffBotState, pending.reviewer_id)
@@ -500,6 +546,7 @@ class ReviewService:
                         Submission.source_channel_id,
                         Submission.source_message_id,
                         Submission.reviewed_at,
+                        Feedback.id.label("feedback_id"),
                         Feedback.verdict.label("feedback_verdict"),
                         Feedback.message.label("feedback_message"),
                         StaffUser.display_name.label("reviewer_name"),
@@ -524,11 +571,23 @@ class ReviewService:
                     .order_by(SubmissionAttachment.created_at.asc())
                 )
             ).all()
+            feedback_attachments = []
+            if row.feedback_id is not None:
+                feedback_attachments = list(
+                    (
+                        await session.scalars(
+                            select(FeedbackAttachment)
+                            .where(FeedbackAttachment.feedback_id == row.feedback_id)
+                            .order_by(FeedbackAttachment.created_at.asc())
+                        )
+                    ).all()
+                )
 
             previous_rows = (
                 await session.execute(
                     select(
                         Submission.id,
+                        Feedback.id.label("feedback_id"),
                         Submission.attempt_number,
                         Submission.submitted_at,
                         Submission.text_body,
@@ -550,6 +609,11 @@ class ReviewService:
                 )
             ).all()
             previous_ids = [previous.id for previous in previous_rows]
+            previous_feedback_ids = [
+                previous.feedback_id
+                for previous in previous_rows
+                if previous.feedback_id is not None
+            ]
             previous_attachment_rows = []
             if previous_ids:
                 previous_attachment_rows = list(
@@ -561,12 +625,30 @@ class ReviewService:
                         )
                     ).all()
                 )
+            previous_feedback_attachment_rows = []
+            if previous_feedback_ids:
+                previous_feedback_attachment_rows = list(
+                    (
+                        await session.scalars(
+                            select(FeedbackAttachment)
+                            .where(FeedbackAttachment.feedback_id.in_(previous_feedback_ids))
+                            .order_by(FeedbackAttachment.created_at.asc())
+                        )
+                    ).all()
+                )
             attachments_by_submission: dict[UUID, list[ReviewAttachment]] = {
                 submission_id: [] for submission_id in previous_ids
             }
             for attachment in previous_attachment_rows:
                 attachments_by_submission[attachment.submission_id].append(
                     _review_attachment(attachment)
+                )
+            feedback_attachments_by_feedback: dict[UUID, list[ReviewAttachment]] = {
+                feedback_id: [] for feedback_id in previous_feedback_ids
+            }
+            for attachment in previous_feedback_attachment_rows:
+                feedback_attachments_by_feedback[attachment.feedback_id].append(
+                    _feedback_review_attachment(attachment)
                 )
 
             return ReviewDetail(
@@ -599,6 +681,10 @@ class ReviewService:
                     _review_attachment(attachment)
                     for attachment in attachments
                 ),
+                feedback_attachments=tuple(
+                    _feedback_review_attachment(attachment)
+                    for attachment in feedback_attachments
+                ),
                 previous_attempts=tuple(
                     ReviewAttempt(
                         submission_id=previous.id,
@@ -612,6 +698,14 @@ class ReviewService:
                         feedback_message=previous.feedback_message,
                         reviewer_name=previous.reviewer_name,
                         attachments=tuple(attachments_by_submission[previous.id]),
+                        feedback_attachments=tuple(
+                            feedback_attachments_by_feedback.get(
+                                previous.feedback_id,
+                                [],
+                            )
+                            if previous.feedback_id is not None
+                            else []
+                        ),
                     )
                     for previous in previous_rows
                 ),
@@ -639,6 +733,40 @@ class ReviewService:
                 kind=attachment.kind,
                 telegram_file_id=attachment.telegram_file_id,
                 external_url=attachment.external_url,
+                local_path=None,
+                file_name=attachment.file_name,
+                mime_type=attachment.mime_type,
+                file_size=attachment.file_size,
+            )
+
+    async def get_feedback_attachment_media_source(
+        self,
+        *,
+        submission_id: UUID,
+        attachment_id: UUID,
+    ) -> AttachmentMediaSource:
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    select(FeedbackAttachment, Feedback)
+                    .join(Feedback, Feedback.id == FeedbackAttachment.feedback_id)
+                    .where(
+                        FeedbackAttachment.id == attachment_id,
+                        Feedback.submission_id == submission_id,
+                    )
+                )
+            ).one_or_none()
+            if row is None:
+                raise AttachmentNotFoundError
+            attachment, feedback = row
+
+            return AttachmentMediaSource(
+                id=attachment.id,
+                submission_id=feedback.submission_id,
+                kind=attachment.kind,
+                telegram_file_id=attachment.telegram_file_id,
+                external_url=attachment.external_url,
+                local_path=attachment.local_path,
                 file_name=attachment.file_name,
                 mime_type=attachment.mime_type,
                 file_size=attachment.file_size,
@@ -651,6 +779,7 @@ class ReviewService:
         reviewer_telegram_user_id: int,
         verdict: FeedbackVerdict,
         message: str,
+        attachments: tuple[FeedbackAttachmentInput, ...] = (),
     ) -> ReviewResult:
         async with self._session_factory() as session:
             reviewer_id = await session.scalar(
@@ -667,6 +796,7 @@ class ReviewService:
             reviewer_id=reviewer_id,
             verdict=verdict,
             message=message,
+            attachments=attachments,
         )
 
     async def review_by_staff_id(
@@ -676,10 +806,13 @@ class ReviewService:
         reviewer_id: UUID,
         verdict: FeedbackVerdict,
         message: str,
+        attachments: tuple[FeedbackAttachmentInput, ...] = (),
     ) -> ReviewResult:
         normalized_message = message.strip()
-        if not normalized_message:
+        if not normalized_message and not attachments:
             raise EmptyFeedbackError
+        if not normalized_message:
+            normalized_message = "См. вложение куратора."
 
         async with session_scope(self._session_factory) as session:
             reviewer = await session.scalar(
@@ -725,14 +858,32 @@ class ReviewService:
                 else SubmissionStatus.REVISION_REQUESTED
             )
             submission.reviewed_at = datetime.now(UTC)
-            session.add(
-                Feedback(
-                    submission_id=submission.id,
-                    reviewer_id=reviewer.id,
-                    verdict=verdict,
-                    message=normalized_message,
-                )
+            feedback = Feedback(
+                submission_id=submission.id,
+                reviewer_id=reviewer.id,
+                verdict=verdict,
+                message=normalized_message,
             )
+            for attachment in attachments:
+                feedback.attachments.append(
+                    FeedbackAttachment(
+                        kind=attachment.kind,
+                        telegram_file_id=attachment.telegram_file_id,
+                        telegram_file_unique_id=attachment.telegram_file_unique_id,
+                        discord_attachment_id=attachment.discord_attachment_id,
+                        external_url=attachment.external_url,
+                        local_path=attachment.local_path,
+                        source_chat_id=attachment.source_chat_id,
+                        source_message_id=attachment.source_message_id,
+                        file_name=attachment.file_name,
+                        mime_type=attachment.mime_type,
+                        file_size=attachment.file_size,
+                        duration_seconds=attachment.duration_seconds,
+                        width=attachment.width,
+                        height=attachment.height,
+                    )
+                )
+            session.add(feedback)
 
             progression = await ProgressionService.record_review(
                 session,
@@ -747,6 +898,7 @@ class ReviewService:
                 student_telegram_user_id=student.telegram_user_id,
                 verdict=verdict,
                 feedback_message=normalized_message,
+                feedback_attachment_count=len(attachments),
                 current_lesson_position=progression.current_lesson_position,
                 course_completed=progression.course_completed,
             )

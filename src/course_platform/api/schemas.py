@@ -112,6 +112,7 @@ class ReviewAttemptResponse(APIModel):
     feedback_message: str | None
     reviewer_name: str | None
     attachments: list[ReviewAttachmentResponse]
+    feedback_attachments: list[ReviewAttachmentResponse]
 
 
 class ReviewDetailResponse(ReviewQueueItemResponse):
@@ -120,12 +121,14 @@ class ReviewDetailResponse(ReviewQueueItemResponse):
     feedback_message: str | None
     reviewer_name: str | None
     attachments: list[ReviewAttachmentResponse]
+    feedback_attachments: list[ReviewAttachmentResponse]
     previous_attempts: list[ReviewAttemptResponse]
 
     @classmethod
     def from_domain(cls, item: ReviewDetail) -> "ReviewDetailResponse":
         payload = asdict(item)
         payload["attachments"] = list(payload["attachments"])
+        payload["feedback_attachments"] = list(payload["feedback_attachments"])
         payload["previous_attempts"] = list(payload["previous_attempts"])
         for field in ("source_guild_id", "source_channel_id", "source_message_id"):
             value = payload[field]

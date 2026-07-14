@@ -1,6 +1,7 @@
 """Telegram dispatcher for database-backed feedback notifications."""
 
 import logging
+from pathlib import Path
 
 from course_platform.bot.api import TelegramBotClient
 from course_platform.bot.ui import (
@@ -8,7 +9,7 @@ from course_platform.bot.ui import (
     feedback_notification_text,
     stage_keyboard,
 )
-from course_platform.models.enums import FeedbackVerdict
+from course_platform.models.enums import AttachmentKind, FeedbackVerdict
 from course_platform.services.notifications import (
     AccessNotificationService,
     FeedbackNotificationService,
@@ -44,6 +45,35 @@ class TelegramFeedbackDispatcher:
                     parse_mode="HTML",
                     reply_markup=keyboard,
                 )
+                for attachment in notification.attachments:
+                    if (
+                        attachment.source_chat_id is not None
+                        and attachment.source_message_id is not None
+                    ):
+                        await self._api.copy_message(
+                            notification.student_telegram_user_id,
+                            attachment.source_chat_id,
+                            attachment.source_message_id,
+                        )
+                    elif attachment.external_url is not None:
+                        await self._api.send_message(
+                            notification.student_telegram_user_id,
+                            attachment.external_url,
+                        )
+                    elif attachment.local_path is not None:
+                        local_path = Path(attachment.local_path)
+                        if attachment.kind is AttachmentKind.PHOTO:
+                            await self._api.send_photo_file(
+                                notification.student_telegram_user_id,
+                                local_path,
+                                mime_type=attachment.mime_type or "image/jpeg",
+                            )
+                        else:
+                            await self._api.send_document_file(
+                                notification.student_telegram_user_id,
+                                local_path,
+                                mime_type=attachment.mime_type or "application/octet-stream",
+                            )
             except Exception as error:
                 logger.exception(
                     "Failed to deliver feedback notification %s",

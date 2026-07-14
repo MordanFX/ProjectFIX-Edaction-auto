@@ -14,15 +14,28 @@ from course_platform.models import (
     Course,
     Enrollment,
     Feedback,
+    FeedbackAttachment,
     Lesson,
     Student,
     Submission,
 )
 from course_platform.models.enums import (
+    AttachmentKind,
     EnrollmentStatus,
     FeedbackVerdict,
     NotificationStatus,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackNotificationAttachment:
+    kind: AttachmentKind
+    source_chat_id: int | None
+    source_message_id: int | None
+    external_url: str | None
+    local_path: str | None
+    file_name: str | None
+    mime_type: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +44,7 @@ class FeedbackNotification:
     student_telegram_user_id: int
     verdict: FeedbackVerdict
     message: str
+    attachments: tuple[FeedbackNotificationAttachment, ...]
     current_lesson_position: int
     course_completed: bool
 
@@ -76,12 +90,13 @@ class FeedbackNotificationService:
                 .order_by(Feedback.created_at.asc())
                 .limit(limit)
             )
-            return [
+            items = [
                 FeedbackNotification(
                     feedback_id=row.id,
                     student_telegram_user_id=row.telegram_user_id,
                     verdict=row.verdict,
                     message=row.message,
+                    attachments=(),
                     current_lesson_position=row.current_lesson_position,
                     course_completed=(
                         row.status is EnrollmentStatus.COMPLETED
@@ -89,6 +104,53 @@ class FeedbackNotificationService:
                     ),
                 )
                 for row in rows
+            ]
+            if not items:
+                return []
+            attachments = await session.execute(
+                select(
+                    FeedbackAttachment.feedback_id,
+                    FeedbackAttachment.kind,
+                    FeedbackAttachment.source_chat_id,
+                    FeedbackAttachment.source_message_id,
+                    FeedbackAttachment.external_url,
+                    FeedbackAttachment.local_path,
+                    FeedbackAttachment.file_name,
+                    FeedbackAttachment.mime_type,
+                )
+                .where(
+                    FeedbackAttachment.feedback_id.in_(
+                        [item.feedback_id for item in items]
+                    )
+                )
+                .order_by(FeedbackAttachment.created_at.asc())
+            )
+            by_feedback: dict[UUID, list[FeedbackNotificationAttachment]] = {
+                item.feedback_id: [] for item in items
+            }
+            for row in attachments:
+                by_feedback[row.feedback_id].append(
+                    FeedbackNotificationAttachment(
+                        kind=row.kind,
+                        source_chat_id=row.source_chat_id,
+                        source_message_id=row.source_message_id,
+                        external_url=row.external_url,
+                        local_path=row.local_path,
+                        file_name=row.file_name,
+                        mime_type=row.mime_type,
+                    )
+                )
+            return [
+                FeedbackNotification(
+                    feedback_id=item.feedback_id,
+                    student_telegram_user_id=item.student_telegram_user_id,
+                    verdict=item.verdict,
+                    message=item.message,
+                    attachments=tuple(by_feedback[item.feedback_id]),
+                    current_lesson_position=item.current_lesson_position,
+                    course_completed=item.course_completed,
+                )
+                for item in items
             ]
 
     async def mark_sent(self, feedback_id: UUID) -> None:

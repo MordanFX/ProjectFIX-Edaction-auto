@@ -46,6 +46,8 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${PROJECTFIX_POSTGRES_USER:-projectfix}:${PROJECTFIX_POSTGRES_PASSWORD:-projectfix-change-me}@postgres:5432/${PROJECTFIX_POSTGRES_DB:-projectfix}
+    volumes:
+      - feedback_uploads:/app/data/feedback_uploads
     expose:
       - "8000"
     healthcheck:
@@ -66,6 +68,8 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${PROJECTFIX_POSTGRES_USER:-projectfix}:${PROJECTFIX_POSTGRES_PASSWORD:-projectfix-change-me}@postgres:5432/${PROJECTFIX_POSTGRES_DB:-projectfix}
+    volumes:
+      - feedback_uploads:/app/data/feedback_uploads
     command: ["python", "-m", "course_platform.bot"]
 
   discord-bot:
@@ -80,6 +84,8 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${PROJECTFIX_POSTGRES_USER:-projectfix}:${PROJECTFIX_POSTGRES_PASSWORD:-projectfix-change-me}@postgres:5432/${PROJECTFIX_POSTGRES_DB:-projectfix}
+    volumes:
+      - feedback_uploads:/app/data/feedback_uploads
     command: ["python", "-m", "course_platform.discord"]
 
   frontend:
@@ -95,3 +101,4 @@ services:
 
 volumes:
   postgres_data:
+  feedback_uploads:

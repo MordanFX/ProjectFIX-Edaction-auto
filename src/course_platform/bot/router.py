@@ -30,6 +30,7 @@ from course_platform.services.progression import (
 )
 from course_platform.services.reviews import (
     EmptyFeedbackError,
+    FeedbackAttachmentInput,
     ReviewQueueItem,
     ReviewService,
     SubmissionAlreadyReviewedError,
@@ -172,16 +173,10 @@ class MessageRouter:
                 "Работа осталась в очереди и доступна для повторного решения."
             )
         elif pending_feedback is not None and not command.startswith("/"):
-            if not message.text:
-                response = (
-                    "💬 <b>Нужен текстовый комментарий</b>\n\n"
-                    "Напиши обратную связь ученику одним сообщением или используй /cancel_review."
-                )
-            else:
-                response = await self._complete_review_feedback(
-                    message.sender.id,
-                    message.text,
-                )
+            response = await self._complete_review_feedback_from_message(
+                message.sender.id,
+                message,
+            )
         elif command == "/start":
             registration = await self._students.register(self._student_registration(message.sender))
             progress = await self._students.get_progress(message.sender.id)
@@ -847,7 +842,7 @@ class MessageRouter:
             callback.message.chat.id,
             "💬 <b>КОММЕНТАРИЙ УЧЕНИКУ</b>\n\n"
             f"Выбрано: <b>{verdict_text}</b>.\n"
-            "Напиши обратную связь одним сообщением. "
+            "Напиши обратную связь текстом или отправь фото/файл с подписью. "
             "Решение будет сохранено только после этого.\n\n"
             "Отмена: /cancel_review",
             parse_mode="HTML",
@@ -863,14 +858,16 @@ class MessageRouter:
         self,
         reviewer_telegram_user_id: int,
         message: str,
+        attachments: tuple[FeedbackAttachmentInput, ...] = (),
     ) -> str:
         try:
             completion = await self._reviews.complete_telegram_feedback(
                 reviewer_telegram_user_id=reviewer_telegram_user_id,
                 message=message,
+                attachments=attachments,
             )
         except EmptyFeedbackError:
-            return "⚠️ Комментарий пустой. Напиши обратную связь ученику текстом."
+            return "⚠️ Комментарий пустой. Напиши текст или отправь фото/файл с пояснением."
         except SubmissionAlreadyReviewedError:
             await self._reviews.cancel_telegram_feedback(reviewer_telegram_user_id)
             return "ℹ️ Эта работа уже проверена другим куратором."
@@ -886,6 +883,19 @@ class MessageRouter:
         return (
             "✅ <b>РЕШЕНИЕ СОХРАНЕНО</b>\n\n"
             f"Работа {verdict_text}. Комментарий отправляется ученику."
+        )
+
+    async def _complete_review_feedback_from_message(
+        self,
+        reviewer_telegram_user_id: int,
+        message: TelegramMessage,
+    ) -> str:
+        attachment = self._feedback_attachment_from_message(message)
+        feedback_text = (message.text or message.caption or "").strip()
+        return await self._complete_review_feedback(
+            reviewer_telegram_user_id,
+            feedback_text,
+            (attachment,) if attachment is not None else (),
         )
 
     @staticmethod
@@ -2174,6 +2184,66 @@ class MessageRouter:
                 )
             except (TelegramAPIError, TelegramTransportError):
                 continue
+
+    @staticmethod
+    def _feedback_attachment_from_message(
+        message: TelegramMessage,
+    ) -> FeedbackAttachmentInput | None:
+        if message.document is not None:
+            return FeedbackAttachmentInput(
+                kind=AttachmentKind.DOCUMENT,
+                telegram_file_id=message.document.file_id,
+                telegram_file_unique_id=message.document.file_unique_id,
+                file_name=message.document.file_name,
+                mime_type=message.document.mime_type,
+                file_size=message.document.file_size,
+                source_chat_id=message.chat.id,
+                source_message_id=message.message_id,
+            )
+        if message.video is not None:
+            return FeedbackAttachmentInput(
+                kind=AttachmentKind.VIDEO,
+                telegram_file_id=message.video.file_id,
+                telegram_file_unique_id=message.video.file_unique_id,
+                file_name=message.video.file_name,
+                mime_type=message.video.mime_type or "video/mp4",
+                file_size=message.video.file_size,
+                source_chat_id=message.chat.id,
+                source_message_id=message.message_id,
+                duration_seconds=message.video.duration,
+                width=message.video.width,
+                height=message.video.height,
+            )
+        if message.video_note is not None:
+            return FeedbackAttachmentInput(
+                kind=AttachmentKind.VIDEO_NOTE,
+                telegram_file_id=message.video_note.file_id,
+                telegram_file_unique_id=message.video_note.file_unique_id,
+                mime_type="video/mp4",
+                file_size=message.video_note.file_size,
+                source_chat_id=message.chat.id,
+                source_message_id=message.message_id,
+                duration_seconds=message.video_note.duration,
+                width=message.video_note.length,
+                height=message.video_note.length,
+            )
+        if message.photo:
+            photo = max(
+                message.photo,
+                key=lambda item: item.file_size or item.width * item.height,
+            )
+            return FeedbackAttachmentInput(
+                kind=AttachmentKind.PHOTO,
+                telegram_file_id=photo.file_id,
+                telegram_file_unique_id=photo.file_unique_id,
+                file_size=photo.file_size,
+                mime_type="image/jpeg",
+                source_chat_id=message.chat.id,
+                source_message_id=message.message_id,
+                width=photo.width,
+                height=photo.height,
+            )
+        return None
 
     async def _accept_attachment_submission(
         self,

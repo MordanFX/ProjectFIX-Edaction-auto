@@ -8,8 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_platform.db.session import session_scope
-from course_platform.models import Feedback, Submission
+from course_platform.models import Feedback, FeedbackAttachment, Submission
 from course_platform.models.enums import FeedbackVerdict, NotificationStatus, SubmissionSource
+
+
+@dataclass(frozen=True, slots=True)
+class DiscordFeedbackAttachment:
+    external_url: str | None
+    local_path: str | None
+    file_name: str | None
+    mime_type: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +26,7 @@ class DiscordFeedbackNotification:
     channel_id: int
     verdict: FeedbackVerdict
     message: str
+    attachments: tuple[DiscordFeedbackAttachment, ...]
 
 
 class DiscordFeedbackNotificationService:
@@ -45,15 +54,55 @@ class DiscordFeedbackNotificationService:
                 .order_by(Feedback.created_at)
                 .limit(limit)
             )
-            return [
+            items = [
                 DiscordFeedbackNotification(
                     feedback_id=row.id,
                     channel_id=row.source_channel_id,
                     verdict=row.verdict,
                     message=row.message,
+                    attachments=(),
                 )
                 for row in rows
                 if row.source_channel_id is not None
+            ]
+            if not items:
+                return []
+            attachments = await session.execute(
+                select(
+                    FeedbackAttachment.feedback_id,
+                    FeedbackAttachment.external_url,
+                    FeedbackAttachment.local_path,
+                    FeedbackAttachment.file_name,
+                    FeedbackAttachment.mime_type,
+                )
+                .where(
+                    FeedbackAttachment.feedback_id.in_(
+                        [item.feedback_id for item in items]
+                    )
+                )
+                .order_by(FeedbackAttachment.created_at.asc())
+            )
+            by_feedback: dict[UUID, list[DiscordFeedbackAttachment]] = {
+                item.feedback_id: [] for item in items
+            }
+            for row in attachments:
+                by_feedback[row.feedback_id].append(
+                    DiscordFeedbackAttachment(
+                        external_url=row.external_url,
+                        local_path=row.local_path,
+                        file_name=row.file_name,
+                        mime_type=row.mime_type,
+                    )
+                )
+            return [
+                DiscordFeedbackNotification(
+                    feedback_id=item.feedback_id,
+                    channel_id=item.channel_id,
+                    verdict=item.verdict,
+                    message=item.message,
+                    attachments=tuple(by_feedback[item.feedback_id]),
+                )
+                for item in items
             ]
 
     async def mark_sent(self, feedback_id: UUID) -> None:

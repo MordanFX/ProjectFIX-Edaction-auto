@@ -7,14 +7,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_platform.dev.seed_demo import seed_demo_data
-from course_platform.models import Enrollment, Feedback, StaffUser, Submission
+from course_platform.models import (
+    Enrollment,
+    Feedback,
+    FeedbackAttachment,
+    StaffUser,
+    Submission,
+)
 from course_platform.models.enums import (
+    AttachmentKind,
     EnrollmentStatus,
     FeedbackVerdict,
     SubmissionStatus,
 )
 from course_platform.services.progression import ProgressionService
 from course_platform.services.reviews import (
+    FeedbackAttachmentInput,
     ReviewService,
     SubmissionAlreadyReviewedError,
     UnauthorizedReviewerError,
@@ -191,6 +199,50 @@ async def test_telegram_feedback_draft_survives_until_comment_is_sent(
     assert feedback is not None
     assert feedback.message == "Добавь пояснение к последнему шагу."
     assert await reviews.get_pending_telegram_feedback(222) is None
+
+
+async def test_curator_feedback_can_include_attachment_without_text(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    submission_id = await prepare_pending_submission(session_factory)
+    reviews = ReviewService(session_factory)
+
+    result = await reviews.review(
+        submission_id=submission_id,
+        reviewer_telegram_user_id=222,
+        verdict=FeedbackVerdict.REVISION_REQUESTED,
+        message=" ",
+        attachments=(
+            FeedbackAttachmentInput(
+                kind=AttachmentKind.PHOTO,
+                telegram_file_id="file-id",
+                telegram_file_unique_id="unique-id",
+                source_chat_id=222,
+                source_message_id=88,
+                mime_type="image/jpeg",
+                file_size=12345,
+                width=1280,
+                height=720,
+            ),
+        ),
+    )
+
+    async with session_factory() as session:
+        feedback = await session.scalar(select(Feedback))
+        attachment = await session.scalar(select(FeedbackAttachment))
+
+    detail = await reviews.get_detail(submission_id)
+
+    assert result.feedback_attachment_count == 1
+    assert feedback is not None
+    assert feedback.message == "См. вложение куратора."
+    assert attachment is not None
+    assert attachment.kind is AttachmentKind.PHOTO
+    assert attachment.source_chat_id == 222
+    assert attachment.source_message_id == 88
+    assert len(detail.feedback_attachments) == 1
+    assert detail.feedback_attachments[0].kind is AttachmentKind.PHOTO
+    assert detail.feedback_attachments[0].source_available is True
 
 
 async def test_only_active_staff_can_review_and_decision_is_final(

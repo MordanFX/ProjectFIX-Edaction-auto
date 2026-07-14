@@ -5,6 +5,7 @@ import json
 import logging
 import platform
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from websockets.asyncio.client import connect
@@ -181,13 +182,48 @@ class DiscordApplication:
                         else "🔄 Домашняя работа отправлена на доработку"
                     )
                     try:
-                        await self._api.send_channel_message(
-                            item.channel_id,
-                            {
-                                "content": f"**{verdict}**\n\n{item.message}",
-                                "allowed_mentions": {"parse": []},
-                            },
+                        local_attachments = [
+                            attachment
+                            for attachment in item.attachments
+                            if attachment.local_path is not None
+                        ]
+                        attachment_lines = [
+                            f"- {attachment.file_name or 'attachment'}: {attachment.external_url}"
+                            for attachment in item.attachments
+                            if attachment.external_url is not None
+                        ]
+                        attachments_text = (
+                            "\n\n**Вложения куратора:**\n"
+                            + "\n".join(attachment_lines)
+                            if attachment_lines
+                            else ""
                         )
+                        payload = {
+                            "content": f"**{verdict}**\n\n{item.message}{attachments_text}",
+                            "allowed_mentions": {"parse": []},
+                        }
+                        if local_attachments:
+                            first_attachment = local_attachments[0]
+                            await self._api.send_channel_message_file(
+                                item.channel_id,
+                                payload,
+                                Path(first_attachment.local_path or ""),
+                                file_name=first_attachment.file_name,
+                                mime_type=first_attachment.mime_type,
+                            )
+                            for attachment in local_attachments[1:]:
+                                await self._api.send_channel_message_file(
+                                    item.channel_id,
+                                    {"content": "", "allowed_mentions": {"parse": []}},
+                                    Path(attachment.local_path or ""),
+                                    file_name=attachment.file_name,
+                                    mime_type=attachment.mime_type,
+                                )
+                        else:
+                            await self._api.send_channel_message(
+                                item.channel_id,
+                                payload,
+                            )
                         await self._feedback_service.mark_sent(item.feedback_id)
                     except Exception as error:
                         logger.exception("Discord feedback delivery failed")

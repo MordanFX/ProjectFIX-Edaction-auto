@@ -1,5 +1,8 @@
 """FastAPI authentication and protected review queue tests."""
 
+from asyncio import to_thread
+from pathlib import Path
+
 import httpx
 from pydantic import SecretStr
 from sqlalchemy import select
@@ -15,6 +18,7 @@ from course_platform.models import (
     Course,
     DiscordHomeworkSpace,
     Enrollment,
+    FeedbackAttachment,
     Lesson,
     LessonMaterial,
     StaffUser,
@@ -63,11 +67,12 @@ async def create_staff(
 def build_client(
     session_factory: async_sessionmaker[AsyncSession],
     *,
+    settings: Settings | None = None,
     telegram_transport: httpx.AsyncBaseTransport | None = None,
     vimeo_transport: httpx.AsyncBaseTransport | None = None,
 ) -> httpx.AsyncClient:
     application = create_app(
-        settings=api_settings(),
+        settings=settings or api_settings(),
         session_factory=session_factory,
         telegram_transport=telegram_transport,
         vimeo_transport=vimeo_transport,
@@ -491,6 +496,55 @@ async def test_review_queue_requires_auth_and_returns_pending_work(
     assert reviewed_detail.json()["feedback_message"] == "Accepted from the API"
     assert reviewed_detail.json()["reviewed_at"] is not None
     assert reviewed_detail.json()["reviewer_name"] == "API Curator"
+
+
+async def test_review_decision_can_upload_curator_attachment(
+    session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    await create_staff(session_factory)
+    await StudentService(session_factory).register(
+        StudentRegistration(telegram_user_id=111, first_name="Demo")
+    )
+    await seed_demo_data(session_factory)
+    await ProgressionService(session_factory).mark_current_viewed(111)
+    submissions = SubmissionService(session_factory)
+    await submissions.begin(111)
+    await submissions.submit_text(111, "Need markup")
+
+    settings = api_settings()
+    settings.feedback_upload_dir = str(tmp_path)
+
+    async with build_client(session_factory, settings=settings) as client:
+        token = await login(client)
+        queue = await client.get(
+            "/api/reviews",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        submission_id = queue.json()[0]["submission_id"]
+        decision = await client.post(
+            f"/api/reviews/{submission_id}/decision-with-attachment",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"verdict": "revision_requested", "message": ""},
+            files={"attachment": ("markup.png", b"fake-image", "image/png")},
+        )
+        detail = await client.get(
+            f"/api/reviews/{submission_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    async with session_factory() as session:
+        feedback_attachment = await session.scalar(select(FeedbackAttachment))
+
+    assert decision.status_code == 200
+    assert decision.json()["verdict"] == "revision_requested"
+    assert feedback_attachment is not None
+    assert feedback_attachment.file_name == "markup.png"
+    assert feedback_attachment.local_path is not None
+    assert await to_thread(Path(feedback_attachment.local_path).is_file)
+    assert detail.status_code == 200
+    assert detail.json()["feedback_message"] == "См. вложение куратора."
+    assert detail.json()["feedback_attachments"][0]["file_name"] == "markup.png"
 
 
 async def test_video_playback_uses_protected_range_proxy(
