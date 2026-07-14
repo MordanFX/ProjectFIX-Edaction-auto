@@ -143,6 +143,20 @@ class DiscordAPIClient:
             json={"type": 1, "allow": str(allow), "deny": str(deny)},
         )
 
+    async def set_role_channel_permissions(
+        self,
+        channel_id: int,
+        role_id: int,
+        *,
+        allow: int,
+        deny: int = 0,
+    ) -> None:
+        await self.request(
+            "PUT",
+            f"channels/{channel_id}/permissions/{role_id}",
+            json={"type": 0, "allow": str(allow), "deny": str(deny)},
+        )
+
     async def register_guild_commands(
         self, application_id: int, guild_id: int, commands: list[dict[str, Any]]
     ) -> None:

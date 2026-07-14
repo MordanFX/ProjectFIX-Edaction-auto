@@ -28,6 +28,7 @@ from course_platform.models.enums import (
     AttachmentKind,
     CourseAudience,
     EnrollmentStatus,
+    StaffRole,
     VideoSource,
 )
 from course_platform.services.discord_participants import DiscordParticipantService
@@ -51,13 +52,17 @@ async def create_staff(
     *,
     login: str = "curator",
     password: str = "correct-password",
+    display_name: str = "API Curator",
+    telegram_user_id: int | None = None,
+    role: StaffRole = StaffRole.CURATOR,
 ) -> StaffUser:
     async with session_factory() as session:
         staff = StaffUser(
             login=login,
             password_hash=hash_password(password),
-            display_name="API Curator",
-            telegram_user_id=222,
+            display_name=display_name,
+            telegram_user_id=telegram_user_id,
+            role=role,
         )
         session.add(staff)
         await session.commit()
@@ -199,6 +204,118 @@ async def test_login_and_current_staff(
         "display_name": "API Curator",
         "role": "curator",
     }
+
+
+async def test_staff_management_requires_admin(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await create_staff(session_factory)
+    async with build_client(session_factory) as client:
+        token = await login(client)
+        response = await client.get(
+            "/api/staff",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Administrator access required"
+
+
+async def test_admin_can_create_staff_member(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await create_staff(session_factory, role=StaffRole.ADMIN)
+    async with build_client(session_factory) as client:
+        token = await login(client)
+        auth = {"Authorization": f"Bearer {token}"}
+        created = await client.post(
+            "/api/staff",
+            headers=auth,
+            json={
+                "login": "vlad",
+                "password": "strong-password",
+                "display_name": "Влад Стрельников",
+                "role": "curator",
+                "telegram_user_id": 987654321,
+                "is_active": True,
+            },
+        )
+        staff_list = await client.get("/api/staff", headers=auth)
+
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["login"] == "vlad"
+    assert payload["display_name"] == "Влад Стрельников"
+    assert payload["role"] == "curator"
+    assert payload["telegram_user_id"] == 987654321
+    assert payload["is_active"] is True
+    assert {item["login"] for item in staff_list.json()} == {"curator", "vlad"}
+
+
+async def test_admin_can_update_staff_member(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await create_staff(session_factory, role=StaffRole.ADMIN)
+    staff = await create_staff(
+        session_factory,
+        login="vlad",
+        password="old-password",
+        role=StaffRole.CURATOR,
+    )
+
+    async with build_client(session_factory) as client:
+        token = await login(client)
+        auth = {"Authorization": f"Bearer {token}"}
+        updated = await client.patch(
+            f"/api/staff/{staff.id}",
+            headers=auth,
+            json={
+                "password": "new-password",
+                "display_name": "Vlad Updated",
+                "role": "admin",
+                "telegram_user_id": 123456789,
+                "is_active": True,
+            },
+        )
+        login_response = await client.post(
+            "/api/auth/token",
+            data={"username": "vlad", "password": "new-password"},
+        )
+
+    assert updated.status_code == 200
+    payload = updated.json()
+    assert payload["display_name"] == "Vlad Updated"
+    assert payload["role"] == "admin"
+    assert payload["telegram_user_id"] == 123456789
+    assert payload["pending_assigned"] == 0
+    assert payload["reviewed_total"] == 0
+    assert login_response.status_code == 200
+
+
+async def test_staff_linked_telegram_user_is_hidden_from_students(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await create_staff(
+        session_factory,
+        role=StaffRole.ADMIN,
+        telegram_user_id=111,
+    )
+    await StudentService(session_factory).register(
+        StudentRegistration(
+            telegram_user_id=111,
+            first_name="Doc",
+            username="fking_01",
+        )
+    )
+    async with build_client(session_factory) as client:
+        token = await login(client)
+        auth = {"Authorization": f"Bearer {token}"}
+        students = await client.get("/api/students", headers=auth)
+        summary = await client.get("/api/dashboard/summary", headers=auth)
+
+    assert students.status_code == 200
+    assert students.json() == []
+    assert summary.json()["active_students"] == 0
 
 
 async def test_lesson_cover_requires_auth_and_returns_image_or_vimeo_cover(
@@ -545,6 +662,55 @@ async def test_review_decision_can_upload_curator_attachment(
     assert detail.status_code == 200
     assert detail.json()["feedback_message"] == "См. вложение куратора."
     assert detail.json()["feedback_attachments"][0]["file_name"] == "markup.png"
+
+
+async def test_review_assignment_and_curator_stats(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await create_staff(session_factory, login="curator", password="correct-password")
+    await create_staff(
+        session_factory,
+        login="other",
+        password="correct-password",
+        display_name="Other Curator",
+    )
+    await StudentService(session_factory).register(
+        StudentRegistration(telegram_user_id=111, first_name="Demo")
+    )
+    await seed_demo_data(session_factory)
+    await ProgressionService(session_factory).mark_current_viewed(111)
+    submissions = SubmissionService(session_factory)
+    await submissions.begin(111)
+    await submissions.submit_text(111, "Work to assign")
+
+    async with build_client(session_factory) as client:
+        token = await login(client)
+        auth = {"Authorization": f"Bearer {token}"}
+        queue = await client.get("/api/reviews", headers=auth)
+        submission_id = queue.json()[0]["submission_id"]
+        assigned = await client.post(f"/api/reviews/{submission_id}/assign", headers=auth)
+        stats_after_assign = await client.get("/api/reviews/me/stats", headers=auth)
+        released = await client.post(f"/api/reviews/{submission_id}/release", headers=auth)
+        assigned_again = await client.post(f"/api/reviews/{submission_id}/assign", headers=auth)
+        decision = await client.post(
+            f"/api/reviews/{submission_id}/decision",
+            headers=auth,
+            json={"verdict": "accepted", "message": "Done"},
+        )
+        stats_after_review = await client.get("/api/reviews/me/stats", headers=auth)
+
+    assert assigned.status_code == 200
+    assert assigned.json()["status"] == "in_review"
+    assert assigned.json()["assigned_reviewer_name"] == "API Curator"
+    assert stats_after_assign.json()["pending_assigned"] == 1
+    assert released.status_code == 200
+    assert released.json()["status"] == "submitted"
+    assert released.json()["assigned_reviewer_id"] is None
+    assert assigned_again.status_code == 200
+    assert decision.status_code == 200
+    assert stats_after_review.json()["pending_assigned"] == 0
+    assert stats_after_review.json()["reviewed_total"] == 1
+    assert stats_after_review.json()["accepted_total"] == 1
 
 
 async def test_video_playback_uses_protected_range_proxy(

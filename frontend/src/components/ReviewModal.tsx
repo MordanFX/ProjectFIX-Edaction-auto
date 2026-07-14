@@ -3,9 +3,11 @@ import { createPortal } from "react-dom";
 
 import {
   APIError,
+  assignReview,
   getAttachmentPlayback,
   getFeedbackAttachmentPlayback,
   getReviewDetail,
+  releaseReview,
 } from "../api";
 import type {
   ReviewAttachment,
@@ -13,10 +15,13 @@ import type {
   ReviewDetail,
   ReviewQueueItem,
   ReviewVerdict,
+  Staff,
 } from "../types";
 
 interface ReviewModalProps {
   item: ReviewQueueItem;
+  staff: Staff;
+  onChanged: () => Promise<void>;
   onClose: () => void;
   onDecision: (
     item: ReviewQueueItem,
@@ -26,12 +31,13 @@ interface ReviewModalProps {
   ) => Promise<void>;
 }
 
-export function ReviewModal({ item, onClose, onDecision }: ReviewModalProps) {
+export function ReviewModal({ item, staff, onChanged, onClose, onDecision }: ReviewModalProps) {
   const [detail, setDetail] = useState<ReviewDetail | null>(null);
   const [comment, setComment] = useState("");
   const [feedbackFile, setFeedbackFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyVerdict, setBusyVerdict] = useState<ReviewVerdict | null>(null);
+  const [assignmentBusy, setAssignmentBusy] = useState(false);
   const isReviewed = item.status === "accepted" || item.status === "revision_requested";
 
   useEffect(() => {
@@ -76,6 +82,42 @@ export function ReviewModal({ item, onClose, onDecision }: ReviewModalProps) {
     }
   }
 
+  async function handleAssign() {
+    setAssignmentBusy(true);
+    setError(null);
+    try {
+      await assignReview(item.submission_id);
+      await onChanged();
+      setDetail(await getReviewDetail(item.submission_id));
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof APIError
+          ? caughtError.message
+          : "Не удалось взять работу в проверку",
+      );
+    } finally {
+      setAssignmentBusy(false);
+    }
+  }
+
+  async function handleRelease() {
+    setAssignmentBusy(true);
+    setError(null);
+    try {
+      await releaseReview(item.submission_id);
+      await onChanged();
+      setDetail(await getReviewDetail(item.submission_id));
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof APIError
+          ? caughtError.message
+          : "Не удалось вернуть работу в очередь",
+      );
+    } finally {
+      setAssignmentBusy(false);
+    }
+  }
+
   const resolved = detail ?? fallbackDetail(item);
   const discordSourceUrl = resolved.source === "discord"
     && resolved.source_guild_id
@@ -83,6 +125,10 @@ export function ReviewModal({ item, onClose, onDecision }: ReviewModalProps) {
     && resolved.source_message_id
     ? `https://discord.com/channels/${resolved.source_guild_id}/${resolved.source_channel_id}/${resolved.source_message_id}`
     : null;
+  const assignedToMe = resolved.assigned_reviewer_id === staff.id;
+  const assignedToOther =
+    resolved.assigned_reviewer_id !== null && resolved.assigned_reviewer_id !== staff.id;
+  const canDecide = !assignedToOther;
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -125,6 +171,32 @@ export function ReviewModal({ item, onClose, onDecision }: ReviewModalProps) {
             </div>
             <span className="attempt-badge">Попытка {resolved.attempt_number}</span>
           </div>
+
+          {!isReviewed && (
+            <section className={`review-assignment ${assignedToOther ? "locked" : ""}`}>
+              <div>
+                <span>Проверка</span>
+                <strong>
+                  {assignedToMe
+                    ? "Работа закреплена за вами"
+                    : assignedToOther
+                    ? `Проверяет: ${resolved.assigned_reviewer_name || "другой куратор"}`
+                    : "Работа свободна"}
+                </strong>
+              </div>
+              {assignedToMe ? (
+                <button disabled={assignmentBusy} onClick={() => void handleRelease()}>
+                  Вернуть в очередь
+                </button>
+              ) : (
+                !assignedToOther && (
+                  <button disabled={assignmentBusy} onClick={() => void handleAssign()}>
+                    Взять в проверку
+                  </button>
+                )
+              )}
+            </section>
+          )}
 
           <section className="review-lesson-details">
             <article>
@@ -264,7 +336,7 @@ export function ReviewModal({ item, onClose, onDecision }: ReviewModalProps) {
               <div className="review-actions">
                 <button
                   className="revision-button"
-                  disabled={busyVerdict !== null}
+                  disabled={busyVerdict !== null || !canDecide}
                   onClick={() => void decide("revision_requested")}
                 >
                   {busyVerdict === "revision_requested"
@@ -273,7 +345,7 @@ export function ReviewModal({ item, onClose, onDecision }: ReviewModalProps) {
                 </button>
                 <button
                   className="accept-button"
-                  disabled={busyVerdict !== null}
+                  disabled={busyVerdict !== null || !canDecide}
                   onClick={() => void decide("accepted")}
                 >
                   {busyVerdict === "accepted" ? "Сохраняем…" : "Принять работу"}

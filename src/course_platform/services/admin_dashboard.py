@@ -17,6 +17,7 @@ from course_platform.models import (
     Lesson,
     LessonProgress,
     LessonReminder,
+    StaffUser,
     Student,
     Submission,
     SubmissionAttachment,
@@ -304,20 +305,6 @@ class AdminDashboardService:
                     )
                 )
             )
-            active_students = await session.scalar(
-                select(func.count(Student.id)).where(
-                    Student.is_active.is_(True),
-                    Student.origin == StudentOrigin.TELEGRAM,
-                )
-            )
-            completed_enrollments = await session.scalar(
-                select(func.count(Enrollment.id))
-                .join(Student, Student.id == Enrollment.student_id)
-                .where(
-                    Enrollment.status == EnrollmentStatus.COMPLETED,
-                    Student.origin == StudentOrigin.TELEGRAM,
-                )
-            )
             active_courses = await session.scalar(
                 select(func.count(Course.id)).where(
                     Course.is_active.is_(True),
@@ -332,17 +319,29 @@ class AdminDashboardService:
         )
         return DashboardSummary(
             pending_reviews=pending_reviews or 0,
-            active_students=active_students or 0,
-            completed_enrollments=completed_enrollments or 0,
+            active_students=sum(1 for student in students if student.is_active),
+            completed_enrollments=sum(
+                1
+                for student in students
+                if student.enrollment_status == EnrollmentStatus.COMPLETED
+            ),
             active_courses=active_courses or 0,
             average_progress_percent=average_progress,
         )
 
     async def list_students(self) -> list[StudentOverview]:
         async with self._session_factory() as session:
+            staff_telegram_ids = set(
+                await session.scalars(
+                    select(StaffUser.telegram_user_id).where(
+                        StaffUser.telegram_user_id.is_not(None)
+                    )
+                )
+            )
             rows = await session.execute(
                 select(
                     Student.id.label("student_id"),
+                    Student.telegram_user_id,
                     Student.first_name,
                     Student.last_name,
                     Student.username,
@@ -365,6 +364,8 @@ class AdminDashboardService:
 
             result: list[StudentOverview] = []
             for row in rows:
+                if row.telegram_user_id in staff_telegram_ids and row.enrollment_id is None:
+                    continue
                 total_lessons = 0
                 total_assignments = 0
                 accepted_submissions = 0

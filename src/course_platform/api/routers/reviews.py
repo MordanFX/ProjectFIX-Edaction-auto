@@ -17,6 +17,7 @@ from course_platform.api.dependencies import (
 )
 from course_platform.api.schemas import (
     AttachmentPlaybackResponse,
+    CuratorReviewStatsResponse,
     ReviewDecisionRequest,
     ReviewDecisionResponse,
     ReviewDetailResponse,
@@ -34,6 +35,7 @@ from course_platform.services.reviews import (
     AttachmentNotFoundError,
     EmptyFeedbackError,
     FeedbackAttachmentInput,
+    SubmissionAlreadyAssignedError,
     SubmissionAlreadyReviewedError,
     SubmissionNotFoundError,
     UnauthorizedReviewerError,
@@ -53,6 +55,75 @@ async def review_queue(
     del staff
     items = await reviews.list_pending(include_reviewed=True, source=source)
     return [ReviewQueueItemResponse.from_domain(item) for item in items]
+
+
+@router.get("/me/stats", response_model=CuratorReviewStatsResponse)
+async def my_review_stats(
+    staff: CurrentStaffDependency,
+    reviews: ReviewServiceDependency,
+) -> CuratorReviewStatsResponse:
+    return CuratorReviewStatsResponse.model_validate(
+        await reviews.curator_stats(staff.id),
+        from_attributes=True,
+    )
+
+
+@router.post("/{submission_id}/assign", response_model=ReviewQueueItemResponse)
+async def assign_review_to_me(
+    submission_id: UUID,
+    staff: CurrentStaffDependency,
+    reviews: ReviewServiceDependency,
+) -> ReviewQueueItemResponse:
+    try:
+        item = await reviews.assign_to_reviewer(
+            submission_id=submission_id,
+            reviewer_id=staff.id,
+        )
+    except SubmissionNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Submission not found",
+        ) from None
+    except SubmissionAlreadyReviewedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Submission is already reviewed",
+        ) from None
+    except SubmissionAlreadyAssignedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Submission is assigned to another curator",
+        ) from None
+    return ReviewQueueItemResponse.from_domain(item)
+
+
+@router.post("/{submission_id}/release", response_model=ReviewQueueItemResponse)
+async def release_review_assignment(
+    submission_id: UUID,
+    staff: CurrentStaffDependency,
+    reviews: ReviewServiceDependency,
+) -> ReviewQueueItemResponse:
+    try:
+        item = await reviews.release_assignment(
+            submission_id=submission_id,
+            reviewer_id=staff.id,
+        )
+    except SubmissionNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Submission not found",
+        ) from None
+    except SubmissionAlreadyReviewedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Submission is already reviewed",
+        ) from None
+    except SubmissionAlreadyAssignedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Submission is assigned to another curator",
+        ) from None
+    return ReviewQueueItemResponse.from_domain(item)
 
 
 @router.get("/{submission_id}", response_model=ReviewDetailResponse)

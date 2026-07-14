@@ -90,6 +90,7 @@ class DiscordApplication:
             self._homework_service,
             bot_user_id=application_id,
             homework_channel_id=self._homework_channel_id,
+            staff_role_ids=self._staff_role_ids,
         )
         await self._api.guild(self._guild_id)
         await self._api.register_guild_commands(

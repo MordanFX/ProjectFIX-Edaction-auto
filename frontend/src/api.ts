@@ -7,6 +7,7 @@ import type {
   CourseContent,
   CourseOverview,
   CourseUpdate,
+  CuratorReviewStats,
   DashboardSummary,
   DiscordAccess,
   DiscordLessonDispatch,
@@ -18,6 +19,9 @@ import type {
   ReviewVerdict,
   ReminderStepsWrite,
   Staff,
+  StaffCreate,
+  StaffMember,
+  StaffUpdate,
   StudentAccessUpdate,
   StudentDetail,
   StudentLessonDetail,
@@ -97,6 +101,24 @@ export function getCurrentStaff(): Promise<Staff> {
   return request<Staff>("/api/auth/me");
 }
 
+export function getStaffMembers(): Promise<StaffMember[]> {
+  return request<StaffMember[]>("/api/staff");
+}
+
+export function createStaffMember(payload: StaffCreate): Promise<StaffMember> {
+  return request<StaffMember>("/api/staff", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateStaffMember(staffId: string, payload: StaffUpdate): Promise<StaffMember> {
+  return request<StaffMember>(`/api/staff/${staffId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getReviewQueue(source?: "telegram" | "discord"): Promise<ReviewQueueItem[]> {
   const query = source ? `?source=${source}` : "";
   return request<ReviewQueueItem[]>(`/api/reviews${query}`);
@@ -104,6 +126,22 @@ export function getReviewQueue(source?: "telegram" | "discord"): Promise<ReviewQ
 
 export function getReviewDetail(submissionId: string): Promise<ReviewDetail> {
   return request<ReviewDetail>(`/api/reviews/${submissionId}`);
+}
+
+export function getCuratorReviewStats(): Promise<CuratorReviewStats> {
+  return request<CuratorReviewStats>("/api/reviews/me/stats");
+}
+
+export function assignReview(submissionId: string): Promise<ReviewQueueItem> {
+  return request<ReviewQueueItem>(`/api/reviews/${submissionId}/assign`, {
+    method: "POST",
+  });
+}
+
+export function releaseReview(submissionId: string): Promise<ReviewQueueItem> {
+  return request<ReviewQueueItem>(`/api/reviews/${submissionId}/release`, {
+    method: "POST",
+  });
 }
 
 export function getAttachmentPlayback(

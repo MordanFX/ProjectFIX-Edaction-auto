@@ -84,9 +84,16 @@ class Submission(PrimaryKeyMixin, TimestampMixin, Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_reviewer_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("staff_users.id", ondelete="SET NULL"), index=True
+    )
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     enrollment: Mapped[Enrollment] = relationship(back_populates="submissions")
     assignment: Mapped[Assignment] = relationship(back_populates="submissions")
+    assigned_reviewer: Mapped[StaffUser | None] = relationship(
+        foreign_keys=[assigned_reviewer_id]
+    )
     attachments: Mapped[list[SubmissionAttachment]] = relationship(
         back_populates="submission", cascade="all, delete-orphan"
     )

@@ -13,6 +13,33 @@ export interface Staff {
   role: StaffRole;
 }
 
+export interface StaffMember extends Staff {
+  telegram_user_id: number | null;
+  is_active: boolean;
+  created_at: string;
+  pending_assigned: number;
+  reviewed_total: number;
+  accepted_total: number;
+  revision_total: number;
+}
+
+export interface StaffCreate {
+  login: string;
+  password: string;
+  display_name: string;
+  role: StaffRole;
+  telegram_user_id: number | null;
+  is_active: boolean;
+}
+
+export interface StaffUpdate {
+  password: string | null;
+  display_name: string;
+  role: StaffRole;
+  telegram_user_id: number | null;
+  is_active: boolean;
+}
+
 export interface ReviewQueueItem {
   submission_id: string;
   student_id: string;
@@ -33,6 +60,18 @@ export interface ReviewQueueItem {
   source_guild_id: string | null;
   source_channel_id: string | null;
   source_message_id: string | null;
+  assigned_reviewer_id: string | null;
+  assigned_reviewer_name: string | null;
+  assigned_at: string | null;
+}
+
+export interface CuratorReviewStats {
+  pending_assigned: number;
+  reviewed_total: number;
+  accepted_total: number;
+  revision_total: number;
+  telegram_reviewed: number;
+  discord_reviewed: number;
 }
 
 export type AttachmentKind = "document" | "photo" | "video" | "video_note";

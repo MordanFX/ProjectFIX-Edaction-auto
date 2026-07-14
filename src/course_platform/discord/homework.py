@@ -36,11 +36,13 @@ class DiscordHomeworkManager:
         *,
         bot_user_id: int,
         homework_channel_id: int | None = None,
+        staff_role_ids: tuple[int, ...] = (),
     ) -> None:
         self._api = api
         self._service = service
         self._bot_user_id = bot_user_id
         self._homework_channel_id = homework_channel_id
+        self._staff_role_ids = staff_role_ids
 
     async def get_or_create(
         self,
@@ -74,6 +76,12 @@ class DiscordHomeworkManager:
         name = self._space_name(display_name, discord_user_id)
 
         try:
+            staff_thread_access = (
+                VIEW_CHANNEL
+                | READ_MESSAGE_HISTORY
+                | SEND_MESSAGES_IN_THREADS
+                | MANAGE_THREADS
+            )
             await self._api.set_member_channel_permissions(
                 desk_id,
                 self._bot_user_id,
@@ -86,6 +94,12 @@ class DiscordHomeworkManager:
                     | MANAGE_THREADS
                 ),
             )
+            for role_id in self._staff_role_ids:
+                await self._api.set_role_channel_permissions(
+                    desk_id,
+                    role_id,
+                    allow=staff_thread_access,
+                )
             channel = await self._api.create_private_thread(desk_id, name)
             await self._api.add_thread_member(int(channel["id"]), discord_user_id)
             parent_channel_id = desk_id
@@ -146,6 +160,7 @@ class DiscordHomeworkManager:
     ) -> dict[str, object]:
         access = VIEW_CHANNEL | SEND_MESSAGES | READ_MESSAGE_HISTORY | ATTACH_FILES
         bot_access = access | MANAGE_CHANNELS
+        staff_access = access
         return await self._api.create_channel(
             guild_id,
             {
@@ -172,6 +187,15 @@ class DiscordHomeworkManager:
                         "allow": str(bot_access),
                         "deny": "0",
                     },
+                    *[
+                        {
+                            "id": str(role_id),
+                            "type": 0,
+                            "allow": str(staff_access),
+                            "deny": "0",
+                        }
+                        for role_id in self._staff_role_ids
+                    ],
                 ],
             },
         )

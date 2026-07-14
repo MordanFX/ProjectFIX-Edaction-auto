@@ -1,91 +1,61 @@
-# Mordan | Project FIX
+# Project FIX Education
 
-Образовательная платформа из двух интерфейсов:
+Образовательная платформа Project FIX:
 
-- Telegram-бот для прохождения курса учениками;
-- веб-панель для кураторов и администраторов.
+- Telegram-бот для Telegram-потока учеников.
+- Discord-бот для Discord-потока учеников.
+- Веб-панель для администратора и кураторов.
+- Общая PostgreSQL-база как точка интеграции.
 
-Обе части используют общую PostgreSQL-базу и общие SQLAlchemy-модели.
-Полное продуктовое описание находится в `PROJECT_OVERVIEW.md`.
+## Основные рабочие документы
 
-## Текущий этап
+Перед изменениями смотреть:
 
-Готовы фундамент, основной учебный поток Telegram-бота, проверка ДЗ куратором,
-FastAPI-бэкенд и первый рабочий React-интерфейс. Продакшен-деплой пока намеренно
-не настраивается.
+1. `AGENTS.md` — правила работы AI-агента и ограничения проекта.
+2. `PROJECT_STRUCTURE.md` — карта директорий, модулей, сервисов и ответственности.
+3. `CURRENT_STATE.md` — что уже реализовано и как сейчас работает продукт.
+4. `TODO_NEXT.md` — ближайший план разработки.
 
-## Локальная подготовка
+## Архитектурный принцип
 
-Требуется Python 3.12 или новее (до 3.15) и PostgreSQL.
+Telegram, Discord и веб-панель не вызывают друг друга напрямую.
 
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-Copy-Item .env.example .env
+```text
+Telegram bot ┐
+Discord bot  ├── PostgreSQL ── Web panel
+FastAPI API  ┘
 ```
 
-Если Windows launcher не видит уже установленный Python 3.12 (как в текущем
-окружении), создать среду можно по его полному пути:
+Telegram-ученики и Discord-ученики — разные потоки. Их нельзя смешивать в UI и бизнес-логике.
+
+## Локальные проверки
+
+Backend:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m venv .venv
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m pytest --cov
 ```
 
-Затем укажите реальные локальные настройки в `.env`. Этот файл игнорируется Git.
-Токен Telegram никогда не записывается в исходный код.
-
-Для Discord укажите `DISCORD_BOT_TOKEN` и `DISCORD_GUILD_ID`. Discord — отдельный
-учебный поток и не требует Telegram: команда `/homework` регистрирует участника и
-создаёт его приватную ветку. Куратор назначает ему курс типа Discord в веб-панели.
-
-Применение миграций:
+Frontend:
 
 ```powershell
-alembic upgrade head
+cd frontend
+npm run build
 ```
 
-Локальный запуск Discord-бота в отдельном терминале:
+## Сервер
 
-```powershell
-python -m course_platform.discord
+Текущий проект:
+
+```text
+/opt/projectfix-education
 ```
 
-Проверки:
+Не трогать старый отдельный проект:
 
-```powershell
-pytest --cov
-ruff check .
+```text
+/opt/projectfix-bot
+/etc/projectfix-bot/config.yaml
+systemd service: forex-bot
 ```
-
-## Локальная demo-панель
-
-Для локальной SQLite-базы сначала примените миграции и создайте demo-данные:
-
-```powershell
-$env:DATABASE_URL = "sqlite+aiosqlite:///./.local/course.db"
-alembic upgrade head
-python -m course_platform.dev.seed_demo
-```
-
-Запуск API:
-
-```powershell
-$env:DATABASE_URL = "sqlite+aiosqlite:///./.local/course.db"
-$env:JWT_SECRET = "local-demo-secret"
-uvicorn course_platform.api.app:app --reload
-```
-
-Запуск React в другом терминале:
-
-```powershell
-Set-Location frontend
-npm install
-npm run dev
-```
-
-Панель откроется по адресу `http://127.0.0.1:5173`. Локальная demo-учётная
-запись: `demo-curator` / `demo-admin`. Demo-seed заблокирован при
-`APP_ENV=production`.
-
-Конфигурация продакшен-развёртывания намеренно пока не добавлена.

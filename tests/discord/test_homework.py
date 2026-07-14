@@ -14,7 +14,8 @@ class FakeDiscordAPI:
         self.channels: list[dict[str, Any]] = []
         self.private_threads_supported = private_threads_supported
         self.thread_members: list[tuple[int, int]] = []
-        self.permission_updates: list[tuple[int, int, int, int]] = []
+        self.member_permission_updates: list[tuple[int, int, int, int]] = []
+        self.role_permission_updates: list[tuple[int, int, int, int]] = []
 
     async def guild_channels(self, guild_id: int) -> list[dict[str, Any]]:
         return list(self.channels)
@@ -44,7 +45,17 @@ class FakeDiscordAPI:
         allow: int,
         deny: int = 0,
     ) -> None:
-        self.permission_updates.append((channel_id, user_id, allow, deny))
+        self.member_permission_updates.append((channel_id, user_id, allow, deny))
+
+    async def set_role_channel_permissions(
+        self,
+        channel_id: int,
+        role_id: int,
+        *,
+        allow: int,
+        deny: int = 0,
+    ) -> None:
+        self.role_permission_updates.append((channel_id, role_id, allow, deny))
 
 
 async def test_creates_private_thread_once(session_factory) -> None:
@@ -53,7 +64,12 @@ async def test_creates_private_thread_once(session_factory) -> None:
     )
     api = FakeDiscordAPI()
     service = DiscordHomeworkService(session_factory)
-    manager = DiscordHomeworkManager(api, service, bot_user_id=500)  # type: ignore[arg-type]
+    manager = DiscordHomeworkManager(
+        api,
+        service,
+        bot_user_id=500,
+        staff_role_ids=(700, 701),
+    )  # type: ignore[arg-type]
 
     first = await manager.get_or_create(
         guild_id=100,
@@ -74,7 +90,8 @@ async def test_creates_private_thread_once(session_factory) -> None:
     assert second.created is False
     assert second.space == first.space
     assert api.thread_members == [(900, 200)]
-    assert api.permission_updates[0][1] == 500
+    assert api.member_permission_updates[0][1] == 500
+    assert [item[1] for item in api.role_permission_updates] == [700, 701]
     assert len([item for item in api.channels if item["type"] == GUILD_CATEGORY]) == 3
     assert len([item for item in api.channels if item["type"] == GUILD_TEXT]) == 6
 
@@ -85,7 +102,12 @@ async def test_falls_back_to_private_channel(session_factory) -> None:
     )
     api = FakeDiscordAPI(private_threads_supported=False)
     service = DiscordHomeworkService(session_factory)
-    manager = DiscordHomeworkManager(api, service, bot_user_id=500)  # type: ignore[arg-type]
+    manager = DiscordHomeworkManager(
+        api,
+        service,
+        bot_user_id=500,
+        staff_role_ids=(700,),
+    )  # type: ignore[arg-type]
 
     result = await manager.get_or_create(
         guild_id=100,
@@ -103,3 +125,4 @@ async def test_falls_back_to_private_channel(session_factory) -> None:
     assert overwrites[0]["id"] == "100"
     assert overwrites[1]["id"] == "201"
     assert overwrites[2]["id"] == "500"
+    assert overwrites[3]["id"] == "700"

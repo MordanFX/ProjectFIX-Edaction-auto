@@ -14,6 +14,7 @@ from course_platform.api.security import (
 )
 from course_platform.config import Settings
 from course_platform.models import StaffUser
+from course_platform.models.enums import StaffRole
 from course_platform.services.admin_dashboard import AdminDashboardService
 from course_platform.services.course_admin import CourseAdminService
 from course_platform.services.discord_access import DiscordAccessService
@@ -93,9 +94,21 @@ async def get_current_staff(
     return staff
 
 
+async def get_current_admin(
+    staff: Annotated[StaffUser, Depends(get_current_staff)],
+) -> StaffUser:
+    if staff.role != StaffRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access required",
+        )
+    return staff
+
+
 SessionDependency = Annotated[AsyncSession, Depends(get_session)]
 SettingsDependency = Annotated[Settings, Depends(get_api_settings)]
 CurrentStaffDependency = Annotated[StaffUser, Depends(get_current_staff)]
+CurrentAdminDependency = Annotated[StaffUser, Depends(get_current_admin)]
 ReviewServiceDependency = Annotated[ReviewService, Depends(get_review_service)]
 AdminDashboardServiceDependency = Annotated[
     AdminDashboardService, Depends(get_admin_dashboard_service)

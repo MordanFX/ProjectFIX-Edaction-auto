@@ -17,6 +17,7 @@ import logo from "./assets/fix-logo.jpg";
 import { LoadingScreen, LoginScreen } from "./components/AuthScreens";
 import { CourseModal } from "./components/CourseModal";
 import { CoursesSection } from "./components/CoursesSection";
+import { CuratorCabinetSection } from "./components/CuratorCabinetSection";
 import { DiscordAccessSection } from "./components/DiscordAccessSection";
 import { DiscordCourseModal } from "./components/DiscordCourseModal";
 import { DiscordDispatchSection } from "./components/DiscordDispatchSection";
@@ -27,6 +28,7 @@ import { ReviewModal } from "./components/ReviewModal";
 import { ReviewsSection } from "./components/ReviewsSection";
 import { StudentModal } from "./components/StudentModal";
 import { StudentsSection } from "./components/StudentsSection";
+import { TeamSection } from "./components/TeamSection";
 import type {
   CourseOverview,
   DashboardSummary,
@@ -46,7 +48,9 @@ type Section =
   | "discord-access"
   | "students"
   | "knowledge"
-  | "courses";
+  | "courses"
+  | "cabinet"
+  | "team";
 
 interface DashboardData {
   staff: Staff;
@@ -235,6 +239,20 @@ export function App() {
           >
             <i>08</i><b>База знаний</b>
           </button>
+          <button
+            className={section === "cabinet" ? "active" : ""}
+            onClick={() => setSection("cabinet")}
+          >
+            <i>09</i><b>Мой кабинет</b>
+          </button>
+          {data.staff.role === "admin" && (
+            <button
+              className={section === "team" ? "active" : ""}
+              onClick={() => setSection("team")}
+            >
+              <i>10</i><b>Команда</b>
+            </button>
+          )}
         </nav>
         <div className="fix-sidebar__user">
           <span className="user-avatar">{initials(data.staff.display_name)}</span>
@@ -289,12 +307,23 @@ export function App() {
           {section === "students" && <StudentsSection students={data.students} summary={data.summary} onRefresh={handleRefresh} onSelect={setSelectedStudent} />}
           {section === "knowledge" && <KnowledgeBaseSection courses={data.courses} onOpenCourse={setSelectedCourse} />}
           {section === "courses" && <CoursesSection courses={data.courses} onRefresh={handleRefresh} onSelect={setSelectedCourse} />}
+          {section === "cabinet" && (
+            <CuratorCabinetSection
+              staff={data.staff}
+              queue={data.queue}
+              discordQueue={data.discordQueue}
+              onSelect={setSelectedReview}
+            />
+          )}
+          {section === "team" && <TeamSection />}
         </section>
       </div>
 
       {selectedReview && (
         <ReviewModal
           item={selectedReview}
+          staff={data.staff}
+          onChanged={handleRefresh}
           onClose={() => setSelectedReview(null)}
           onDecision={handleDecision}
         />

@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from course_platform.db.session import session_scope
 from course_platform.models import (
@@ -58,6 +59,10 @@ class NoPendingFeedbackError(ReviewWorkflowError):
     pass
 
 
+class SubmissionAlreadyAssignedError(ReviewWorkflowError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class ReviewQueueItem:
     submission_id: UUID
@@ -79,6 +84,9 @@ class ReviewQueueItem:
     source_guild_id: int | None
     source_channel_id: int | None
     source_message_id: int | None
+    assigned_reviewer_id: UUID | None
+    assigned_reviewer_name: str | None
+    assigned_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +235,16 @@ class ReviewResult:
     course_completed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class CuratorReviewStats:
+    pending_assigned: int
+    reviewed_total: int
+    accepted_total: int
+    revision_total: int
+    telegram_reviewed: int
+    discord_reviewed: int
+
+
 class ReviewService:
     """List pending work and apply curator decisions transactionally."""
 
@@ -309,12 +327,16 @@ class ReviewService:
                     Submission.source_guild_id,
                     Submission.source_channel_id,
                     Submission.source_message_id,
+                    Submission.assigned_reviewer_id,
+                    Submission.assigned_at,
+                    StaffUser.display_name.label("assigned_reviewer_name"),
                 )
                 .join(Enrollment, Enrollment.id == Submission.enrollment_id)
                 .join(Student, Student.id == Enrollment.student_id)
                 .join(Assignment, Assignment.id == Submission.assignment_id)
                 .join(Lesson, Lesson.id == Assignment.lesson_id)
                 .join(Course, Course.id == Lesson.course_id)
+                .outerjoin(StaffUser, StaffUser.id == Submission.assigned_reviewer_id)
                 .where(Submission.status.in_(statuses))
                 .order_by(
                     Submission.submitted_at.desc()
@@ -348,9 +370,156 @@ class ReviewService:
                     source_guild_id=row.source_guild_id,
                     source_channel_id=row.source_channel_id,
                     source_message_id=row.source_message_id,
+                    assigned_reviewer_id=row.assigned_reviewer_id,
+                    assigned_reviewer_name=row.assigned_reviewer_name,
+                    assigned_at=row.assigned_at,
                 )
                 for row in rows
             ]
+
+    async def assign_to_reviewer(
+        self,
+        *,
+        submission_id: UUID,
+        reviewer_id: UUID,
+    ) -> ReviewQueueItem:
+        async with session_scope(self._session_factory) as session:
+            submission = await session.get(Submission, submission_id, with_for_update=True)
+            if submission is None:
+                raise SubmissionNotFoundError
+            if submission.status not in {SubmissionStatus.SUBMITTED, SubmissionStatus.IN_REVIEW}:
+                raise SubmissionAlreadyReviewedError
+            if (
+                submission.assigned_reviewer_id is not None
+                and submission.assigned_reviewer_id != reviewer_id
+            ):
+                raise SubmissionAlreadyAssignedError
+            submission.status = SubmissionStatus.IN_REVIEW
+            submission.assigned_reviewer_id = reviewer_id
+            submission.assigned_at = datetime.now(UTC)
+
+        detail = await self.get_detail(submission_id)
+        return ReviewQueueItem(
+            submission_id=detail.submission_id,
+            student_id=detail.student_id,
+            student_name=detail.student_name,
+            student_username=detail.student_username,
+            course_title=detail.course_title,
+            lesson_position=detail.lesson_position,
+            lesson_title=detail.lesson_title,
+            attempt_number=detail.attempt_number,
+            submitted_at=detail.submitted_at,
+            text_body=detail.text_body,
+            attachment_count=detail.attachment_count,
+            attachment_kind=detail.attachment_kind,
+            attachment_file_name=detail.attachment_file_name,
+            attachment_mime_type=detail.attachment_mime_type,
+            status=detail.status,
+            source=detail.source,
+            source_guild_id=detail.source_guild_id,
+            source_channel_id=detail.source_channel_id,
+            source_message_id=detail.source_message_id,
+            assigned_reviewer_id=detail.assigned_reviewer_id,
+            assigned_reviewer_name=detail.assigned_reviewer_name,
+            assigned_at=detail.assigned_at,
+        )
+
+    async def release_assignment(
+        self,
+        *,
+        submission_id: UUID,
+        reviewer_id: UUID,
+    ) -> ReviewQueueItem:
+        async with session_scope(self._session_factory) as session:
+            submission = await session.get(Submission, submission_id, with_for_update=True)
+            if submission is None:
+                raise SubmissionNotFoundError
+            if submission.status not in {SubmissionStatus.SUBMITTED, SubmissionStatus.IN_REVIEW}:
+                raise SubmissionAlreadyReviewedError
+            if (
+                submission.assigned_reviewer_id is not None
+                and submission.assigned_reviewer_id != reviewer_id
+            ):
+                raise SubmissionAlreadyAssignedError
+            submission.status = SubmissionStatus.SUBMITTED
+            submission.assigned_reviewer_id = None
+            submission.assigned_at = None
+
+        detail = await self.get_detail(submission_id)
+        return ReviewQueueItem(
+            submission_id=detail.submission_id,
+            student_id=detail.student_id,
+            student_name=detail.student_name,
+            student_username=detail.student_username,
+            course_title=detail.course_title,
+            lesson_position=detail.lesson_position,
+            lesson_title=detail.lesson_title,
+            attempt_number=detail.attempt_number,
+            submitted_at=detail.submitted_at,
+            text_body=detail.text_body,
+            attachment_count=detail.attachment_count,
+            attachment_kind=detail.attachment_kind,
+            attachment_file_name=detail.attachment_file_name,
+            attachment_mime_type=detail.attachment_mime_type,
+            status=detail.status,
+            source=detail.source,
+            source_guild_id=detail.source_guild_id,
+            source_channel_id=detail.source_channel_id,
+            source_message_id=detail.source_message_id,
+            assigned_reviewer_id=detail.assigned_reviewer_id,
+            assigned_reviewer_name=detail.assigned_reviewer_name,
+            assigned_at=detail.assigned_at,
+        )
+
+    async def curator_stats(self, reviewer_id: UUID) -> CuratorReviewStats:
+        async with self._session_factory() as session:
+            pending_assigned = await session.scalar(
+                select(func.count(Submission.id)).where(
+                    Submission.assigned_reviewer_id == reviewer_id,
+                    Submission.status.in_(
+                        [SubmissionStatus.SUBMITTED, SubmissionStatus.IN_REVIEW]
+                    ),
+                )
+            )
+            reviewed_total = await session.scalar(
+                select(func.count(Feedback.id)).where(Feedback.reviewer_id == reviewer_id)
+            )
+            accepted_total = await session.scalar(
+                select(func.count(Feedback.id)).where(
+                    Feedback.reviewer_id == reviewer_id,
+                    Feedback.verdict == FeedbackVerdict.ACCEPTED,
+                )
+            )
+            revision_total = await session.scalar(
+                select(func.count(Feedback.id)).where(
+                    Feedback.reviewer_id == reviewer_id,
+                    Feedback.verdict == FeedbackVerdict.REVISION_REQUESTED,
+                )
+            )
+            telegram_reviewed = await session.scalar(
+                select(func.count(Feedback.id))
+                .join(Submission, Submission.id == Feedback.submission_id)
+                .where(
+                    Feedback.reviewer_id == reviewer_id,
+                    Submission.source == SubmissionSource.TELEGRAM,
+                )
+            )
+            discord_reviewed = await session.scalar(
+                select(func.count(Feedback.id))
+                .join(Submission, Submission.id == Feedback.submission_id)
+                .where(
+                    Feedback.reviewer_id == reviewer_id,
+                    Submission.source == SubmissionSource.DISCORD,
+                )
+            )
+            return CuratorReviewStats(
+                pending_assigned=pending_assigned or 0,
+                reviewed_total=reviewed_total or 0,
+                accepted_total=accepted_total or 0,
+                revision_total=revision_total or 0,
+                telegram_reviewed=telegram_reviewed or 0,
+                discord_reviewed=discord_reviewed or 0,
+            )
 
     async def list_attachment_copies(
         self,
@@ -520,6 +689,7 @@ class ReviewService:
             .scalar_subquery()
         )
         async with self._session_factory() as session:
+            assigned_reviewer = aliased(StaffUser)
             row = (
                 await session.execute(
                     select(
@@ -545,6 +715,9 @@ class ReviewService:
                         Submission.source_guild_id,
                         Submission.source_channel_id,
                         Submission.source_message_id,
+                        Submission.assigned_reviewer_id,
+                        Submission.assigned_at,
+                        assigned_reviewer.display_name.label("assigned_reviewer_name"),
                         Submission.reviewed_at,
                         Feedback.id.label("feedback_id"),
                         Feedback.verdict.label("feedback_verdict"),
@@ -556,6 +729,10 @@ class ReviewService:
                     .join(Assignment, Assignment.id == Submission.assignment_id)
                     .join(Lesson, Lesson.id == Assignment.lesson_id)
                     .join(Course, Course.id == Lesson.course_id)
+                    .outerjoin(
+                        assigned_reviewer,
+                        assigned_reviewer.id == Submission.assigned_reviewer_id,
+                    )
                     .outerjoin(Feedback, Feedback.submission_id == Submission.id)
                     .outerjoin(StaffUser, StaffUser.id == Feedback.reviewer_id)
                     .where(Submission.id == submission_id)
@@ -673,6 +850,9 @@ class ReviewService:
                 source_guild_id=row.source_guild_id,
                 source_channel_id=row.source_channel_id,
                 source_message_id=row.source_message_id,
+                assigned_reviewer_id=row.assigned_reviewer_id,
+                assigned_reviewer_name=row.assigned_reviewer_name,
+                assigned_at=row.assigned_at,
                 reviewed_at=row.reviewed_at,
                 feedback_verdict=row.feedback_verdict,
                 feedback_message=row.feedback_message,
@@ -845,6 +1025,11 @@ class ReviewService:
                 SubmissionStatus.IN_REVIEW,
             }:
                 raise SubmissionAlreadyReviewedError
+            if (
+                submission.assigned_reviewer_id is not None
+                and submission.assigned_reviewer_id != reviewer.id
+            ):
+                raise SubmissionAlreadyAssignedError
 
             existing_feedback = await session.scalar(
                 select(Feedback.id).where(Feedback.submission_id == submission.id)
@@ -857,6 +1042,8 @@ class ReviewService:
                 if verdict is FeedbackVerdict.ACCEPTED
                 else SubmissionStatus.REVISION_REQUESTED
             )
+            submission.assigned_reviewer_id = reviewer.id
+            submission.assigned_at = submission.assigned_at or datetime.now(UTC)
             submission.reviewed_at = datetime.now(UTC)
             feedback = Feedback(
                 submission_id=submission.id,

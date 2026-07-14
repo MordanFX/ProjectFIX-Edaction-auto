@@ -58,6 +58,33 @@ class StaffResponse(APIModel):
     role: StaffRole
 
 
+class StaffMemberResponse(StaffResponse):
+    telegram_user_id: int | None
+    is_active: bool
+    created_at: datetime
+    pending_assigned: int = 0
+    reviewed_total: int = 0
+    accepted_total: int = 0
+    revision_total: int = 0
+
+
+class StaffCreateRequest(APIModel):
+    login: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=8, max_length=255)
+    display_name: str = Field(min_length=1, max_length=255)
+    role: StaffRole = StaffRole.CURATOR
+    telegram_user_id: int | None = None
+    is_active: bool = True
+
+
+class StaffUpdateRequest(APIModel):
+    password: str | None = Field(default=None, min_length=8, max_length=255)
+    display_name: str = Field(min_length=1, max_length=255)
+    role: StaffRole
+    telegram_user_id: int | None = None
+    is_active: bool
+
+
 class ReviewQueueItemResponse(APIModel):
     submission_id: UUID
     student_id: UUID
@@ -78,6 +105,9 @@ class ReviewQueueItemResponse(APIModel):
     source_guild_id: str | None
     source_channel_id: str | None
     source_message_id: str | None
+    assigned_reviewer_id: UUID | None
+    assigned_reviewer_name: str | None
+    assigned_at: datetime | None
 
     @classmethod
     def from_domain(cls, item: ReviewQueueItem) -> "ReviewQueueItemResponse":
@@ -134,6 +164,15 @@ class ReviewDetailResponse(ReviewQueueItemResponse):
             value = payload[field]
             payload[field] = str(value) if value is not None else None
         return cls(**payload)
+
+
+class CuratorReviewStatsResponse(APIModel):
+    pending_assigned: int
+    reviewed_total: int
+    accepted_total: int
+    revision_total: int
+    telegram_reviewed: int
+    discord_reviewed: int
 
 
 class AttachmentPlaybackResponse(APIModel):
