@@ -49,10 +49,12 @@ from course_platform.services.students import (
 )
 from course_platform.services.submissions import (
     AssignmentAcceptedError,
+    CuratorQuestionReceipt,
     EmptySubmissionError,
     HomeworkAttachment,
     LessonNotViewedError,
     NoActiveAssignmentError,
+    NotAwaitingQuestionError,
     NotAwaitingSubmissionError,
     SubmissionPendingError,
     SubmissionPrompt,
@@ -104,6 +106,8 @@ class MessageRouter:
                 return await self._handle_submission_template_callback(update)
             if callback_data.startswith("submission:"):
                 return await self._handle_submission_start_callback(update)
+            if callback_data.startswith("ask_curator:"):
+                return await self._handle_ask_curator_callback(update)
             if callback_data.startswith("lesson:"):
                 return await self._handle_lesson_callback(update)
             if callback_data.startswith("settings:"):
@@ -1867,7 +1871,11 @@ class MessageRouter:
                         {
                             "text": "📥 Начать сдачу",
                             "callback_data": f"submission:{lesson.lesson_id}",
-                        }
+                        },
+                        {
+                            "text": "❓ Уточнить у куратора",
+                            "callback_data": f"ask_curator:{lesson.lesson_id}",
+                        },
                     ],
                     [
                         {
@@ -1901,6 +1909,51 @@ class MessageRouter:
         await self._api.send_message(
             callback.message.chat.id,
             await self._begin_submission(callback.sender.id),
+            parse_mode="HTML",
+            reply_markup=await self._main_keyboard(callback.sender.id),
+        )
+        return True
+
+    async def _handle_ask_curator_callback(self, update: TelegramUpdate) -> bool:
+        callback = update.callback_query
+        if callback is None or callback.message is None or not callback.data:
+            return False
+        try:
+            lesson_id = UUID(callback.data.split(":", maxsplit=1)[1])
+        except (IndexError, ValueError):
+            await self._api.answer_callback_query(callback.id, text="Урок не найден")
+            return True
+        lesson = await self._learning.get_available_lesson(callback.sender.id, lesson_id)
+        if lesson is None or not lesson.is_current:
+            await self._api.answer_callback_query(
+                callback.id,
+                text="Вопрос можно задать только по текущему уроку",
+                show_alert=True,
+            )
+            return True
+        try:
+            prompt = await self._submissions.begin_question(
+                callback.sender.id,
+                expected_lesson_id=lesson_id,
+            )
+        except NoActiveAssignmentError:
+            await self._api.answer_callback_query(
+                callback.id,
+                text="Задание сейчас недоступно",
+                show_alert=True,
+            )
+            return True
+
+        await self._api.answer_callback_query(callback.id)
+        await self._api.send_message(
+            callback.message.chat.id,
+            (
+                "❓ <b>ВОПРОС КУРАТОРУ</b>\n\n"
+                f"📘 Урок {prompt.lesson_position}: "
+                f"{escape(prompt.lesson_title)}\n\n"
+                "Напиши вопрос одним сообщением. Я отправлю его кураторам.\n"
+                "Для отмены используй /cancel."
+            ),
             parse_mode="HTML",
             reply_markup=await self._main_keyboard(callback.sender.id),
         )
@@ -2081,6 +2134,19 @@ class MessageRouter:
 
     async def _accept_text_submission(self, telegram_user_id: int, text: str) -> str:
         try:
+            question = await self._submissions.submit_question_text(telegram_user_id, text)
+        except NotAwaitingQuestionError:
+            pass
+        except EmptySubmissionError:
+            return "⚠️ Вопрос пустой. Напиши вопрос одним сообщением."
+        else:
+            await self._notify_curators_about_question(question)
+            return (
+                "✅ <b>Вопрос отправлен куратору</b>\n\n"
+                "Куратор увидит вопрос в Telegram и сможет ответить тебе лично."
+            )
+
+        try:
             receipt = await self._submissions.submit_text(telegram_user_id, text)
         except NotAwaitingSubmissionError:
             return self._unknown_command_text()
@@ -2090,6 +2156,24 @@ class MessageRouter:
             return "📎 Для этого задания требуется другой формат ответа."
 
         return self._submission_receipt_text(receipt)
+
+    async def _notify_curators_about_question(
+        self,
+        question: CuratorQuestionReceipt,
+    ) -> None:
+        if not question.curator_telegram_user_ids:
+            return
+        text = self._curator_question_text(question)
+        for curator_id in question.curator_telegram_user_ids:
+            try:
+                await self._api.send_message(
+                    curator_id,
+                    text,
+                    parse_mode="HTML",
+                    reply_markup=curator_keyboard(),
+                )
+            except (TelegramAPIError, TelegramTransportError):
+                continue
 
     async def _accept_attachment_submission(
         self,
@@ -2188,6 +2272,23 @@ class MessageRouter:
             f"{format_hints[prompt.submission_kind]}\n\n"
             "Можно прислать ссылку на Notion, если работа оформлена там.\n"
             "Для отмены используй /cancel."
+        )
+
+    @staticmethod
+    def _curator_question_text(question: CuratorQuestionReceipt) -> str:
+        username = (
+            f"@{escape(question.student_username)}"
+            if question.student_username
+            else "username не указан"
+        )
+        return (
+            "❓ <b>ВОПРОС ОТ УЧЕНИКА</b>\n\n"
+            f"👤 <b>{escape(question.student_name)}</b> · {username}\n"
+            f"📚 Курс: <b>{escape(question.course_title)}</b>\n"
+            f"📘 Урок {question.lesson_position}: "
+            f"<b>{escape(question.lesson_title)}</b>\n\n"
+            "💬 <b>Вопрос:</b>\n"
+            f"{escape(question.question_text)}"
         )
 
     @staticmethod

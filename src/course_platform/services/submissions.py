@@ -16,6 +16,7 @@ from course_platform.models import (
     Feedback,
     Lesson,
     LessonProgress,
+    StaffUser,
     Student,
     StudentBotState,
     Submission,
@@ -64,6 +65,10 @@ class LessonNotViewedError(SubmissionWorkflowError):
     pass
 
 
+class NotAwaitingQuestionError(SubmissionWorkflowError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class SubmissionPrompt:
     lesson_position: int
@@ -77,6 +82,23 @@ class SubmissionReceipt:
     lesson_position: int
     lesson_title: str
     attempt_number: int
+
+
+@dataclass(frozen=True, slots=True)
+class CuratorQuestionPrompt:
+    lesson_position: int
+    lesson_title: str
+
+
+@dataclass(frozen=True, slots=True)
+class CuratorQuestionReceipt:
+    student_name: str
+    student_username: str | None
+    lesson_position: int
+    lesson_title: str
+    course_title: str
+    question_text: str
+    curator_telegram_user_ids: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +244,56 @@ class SubmissionService:
                 submission_kind=row.submission_kind,
             )
 
+    async def begin_question(
+        self,
+        telegram_user_id: int,
+        *,
+        expected_lesson_id: object,
+    ) -> CuratorQuestionPrompt:
+        async with session_scope(self._session_factory) as session:
+            row = (
+                await session.execute(
+                    select(
+                        Student.id.label("student_id"),
+                        Lesson.position,
+                        Lesson.title,
+                        Assignment.id.label("assignment_id"),
+                    )
+                    .join(Enrollment, Enrollment.student_id == Student.id)
+                    .join(Cohort, Cohort.id == Enrollment.cohort_id)
+                    .join(Course, Course.id == Cohort.course_id)
+                    .join(
+                        Lesson,
+                        (Lesson.course_id == Course.id)
+                        & (Lesson.id == expected_lesson_id),
+                    )
+                    .join(Assignment, Assignment.lesson_id == Lesson.id)
+                    .where(
+                        Student.telegram_user_id == telegram_user_id,
+                        Student.is_active.is_(True),
+                        Enrollment.status == EnrollmentStatus.ACTIVE,
+                        Course.is_active.is_(True),
+                        Lesson.is_published.is_(True),
+                    )
+                    .order_by(Enrollment.created_at.desc())
+                    .limit(1)
+                )
+            ).one_or_none()
+            if row is None:
+                raise NoActiveAssignmentError
+
+            bot_state = await session.get(StudentBotState, row.student_id)
+            if bot_state is None:
+                bot_state = StudentBotState(student_id=row.student_id)
+                session.add(bot_state)
+            bot_state.state = ConversationState.AWAITING_CURATOR_QUESTION
+            bot_state.assignment_id = row.assignment_id
+
+            return CuratorQuestionPrompt(
+                lesson_position=row.position,
+                lesson_title=row.title,
+            )
+
     async def submit_text(self, telegram_user_id: int, text: str) -> SubmissionReceipt:
         normalized_text = text.strip()
         if not normalized_text:
@@ -250,6 +322,65 @@ class SubmissionService:
             self._clear_waiting_state(row)
 
             return self._receipt(row, attempt_number)
+
+    async def submit_question_text(
+        self,
+        telegram_user_id: int,
+        text: str,
+    ) -> CuratorQuestionReceipt:
+        normalized_text = text.strip()
+        if not normalized_text:
+            raise EmptySubmissionError
+
+        async with session_scope(self._session_factory) as session:
+            row = (
+                await session.execute(
+                    select(
+                        StudentBotState,
+                        Student.first_name,
+                        Student.last_name,
+                        Student.username,
+                        Lesson.position,
+                        Lesson.title.label("lesson_title"),
+                        Course.title.label("course_title"),
+                    )
+                    .join(Student, Student.id == StudentBotState.student_id)
+                    .join(Assignment, Assignment.id == StudentBotState.assignment_id)
+                    .join(Lesson, Lesson.id == Assignment.lesson_id)
+                    .join(Course, Course.id == Lesson.course_id)
+                    .where(
+                        Student.telegram_user_id == telegram_user_id,
+                        StudentBotState.state == ConversationState.AWAITING_CURATOR_QUESTION,
+                    )
+                    .limit(1)
+                )
+            ).one_or_none()
+            if row is None:
+                raise NotAwaitingQuestionError
+
+            curator_telegram_user_ids = tuple(
+                await session.scalars(
+                    select(StaffUser.telegram_user_id).where(
+                        StaffUser.is_active.is_(True),
+                        StaffUser.telegram_user_id.is_not(None),
+                    )
+                )
+            )
+            row.StudentBotState.state = ConversationState.IDLE
+            row.StudentBotState.assignment_id = None
+
+            student_name = " ".join(
+                part for part in (row.first_name, row.last_name) if part
+            )
+            return CuratorQuestionReceipt(
+                student_name=student_name,
+                student_username=row.username,
+                lesson_position=row.position,
+                lesson_title=row.lesson_title,
+                course_title=row.course_title,
+                question_text=normalized_text,
+                curator_telegram_user_ids=curator_telegram_user_ids,
+            )
 
     async def submit_attachment(
         self,
@@ -310,7 +441,12 @@ class SubmissionService:
                 .join(Student, Student.id == StudentBotState.student_id)
                 .where(
                     Student.telegram_user_id == telegram_user_id,
-                    StudentBotState.state == ConversationState.AWAITING_HOMEWORK,
+                    StudentBotState.state.in_(
+                        (
+                            ConversationState.AWAITING_HOMEWORK,
+                            ConversationState.AWAITING_CURATOR_QUESTION,
+                        )
+                    ),
                 )
             )
             if bot_state is None:

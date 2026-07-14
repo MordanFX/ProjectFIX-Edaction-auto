@@ -87,6 +87,7 @@ class VideoSource(StrEnum):
 class ConversationState(StrEnum):
     IDLE = "idle"
     AWAITING_HOMEWORK = "awaiting_homework"
+    AWAITING_CURATOR_QUESTION = "awaiting_curator_question"
 
 
 class NotificationStatus(StrEnum):
