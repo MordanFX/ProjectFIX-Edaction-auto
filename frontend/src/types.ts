@@ -170,6 +170,19 @@ export interface DiscordWorkspaceOverview {
   members: DiscordMemberOverview[];
 }
 
+export interface DiscordInvite {
+  invite_id: string;
+  guild_id: string;
+  channel_id: string;
+  code: string;
+  invite_url: string;
+  course_id: string | null;
+  max_age_seconds: number;
+  expires_at: string;
+  created_at: string;
+  status: "active" | "expired" | string;
+}
+
 export interface DiscordLessonDispatch {
   dispatch_id: string;
   course_id: string;

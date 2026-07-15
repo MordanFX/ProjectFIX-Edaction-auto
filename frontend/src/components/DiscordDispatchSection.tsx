@@ -3,12 +3,15 @@ import { useEffect, useMemo, useState } from "react";
 import {
   APIError,
   assignDiscordCourse,
+  createDiscordInvite,
   createDiscordLessonDispatch,
   getCourse,
+  getDiscordInvites,
 } from "../api";
 import type {
   CourseContent,
   CourseOverview,
+  DiscordInvite,
   DiscordLessonDispatch,
   DiscordMemberOverview,
   LessonContent,
@@ -40,8 +43,21 @@ export function DiscordDispatchSection({
   const [selected, setSelected] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [inviteBusy, setInviteBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [invite, setInvite] = useState<DiscordInvite | null>(null);
+  const [invites, setInvites] = useState<DiscordInvite[]>([]);
+  const [inviteCopied, setInviteCopied] = useState(false);
   const [result, setResult] = useState<DiscordLessonDispatch | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getDiscordInvites()
+      .then((items) => { if (active) setInvites(items); })
+      .catch(() => { /* invite history is non-critical */ });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!initialRequest) return;
@@ -156,6 +172,31 @@ export function DiscordDispatchSection({
     }
   }
 
+  async function generateInvite() {
+    if (!courseId) return;
+    setInviteBusy(true);
+    setInviteError(null);
+    setInviteCopied(false);
+    try {
+      const created = await createDiscordInvite({
+        course_id: courseId,
+        max_age_seconds: 86400,
+      });
+      setInvite(created);
+      setInvites((current) => [created, ...current]);
+    } catch (caught) {
+      setInviteError(errorMessage(caught, "Не удалось создать invite-ссылку"));
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
+  async function copyInvite() {
+    if (!invite) return;
+    await navigator.clipboard.writeText(invite.invite_url);
+    setInviteCopied(true);
+  }
+
   return <div className="discord-send-page">
     <header className="discord-send-page__heading">
       <div><p className="eyebrow">Discord · выдача заданий</p><h1>Выдать домашнее задание</h1><p>Выберите урок и учеников. Бот отправит задание в каждую приватную ветку.</p></div>
@@ -177,6 +218,28 @@ export function DiscordDispatchSection({
 
     <section className="discord-send-card">
       <header><b>2</b><div><h2>Кому отправить</h2><p>Ученик без этого курса будет добавлен автоматически при отправке первого урока</p></div><button type="button" className="discord-send-select-all" disabled={!selectableIds.length} onClick={() => setSelected(allSelected ? [] : selectableIds)}>{allSelected ? "Снять выбор" : "Выбрать всех доступных"}</button></header>
+      <div className="discord-course-invite">
+        <div>
+          <strong>Новый ученик ещё не на сервере?</strong>
+          <span>Создай одноразовую ссылку и отправь её ученику. После входа он открывает команду <code>/homework</code>, и бот создаёт его личную ветку. Тогда он появится в списке ниже.</span>
+        </div>
+        <button type="button" disabled={!courseId || inviteBusy} onClick={() => void generateInvite()}>
+          {inviteBusy ? "Создаём…" : "Создать invite-ссылку"}
+        </button>
+      </div>
+      {(invite || inviteError) && <div className="discord-course-invite-result">
+        {invite ? <>
+          <input readOnly value={invite.invite_url} />
+          <button type="button" onClick={() => void copyInvite()}>{inviteCopied ? "Скопировано" : "Скопировать"}</button>
+          <small>Ссылка одноразовая (сгорает после первого входа) и действует 24 часа.</small>
+        </> : <span>{inviteError}</span>}
+      </div>}
+      {invites.length > 0 && <ul className="discord-invite-list">
+        {invites.slice(0, 6).map((item) => <li key={item.invite_id} className={`is-${item.status}`}>
+          <span className="discord-invite-list__url">{item.invite_url}</span>
+          <span className="discord-invite-list__status">{item.status === "active" ? "активна" : "истекла"}</span>
+        </li>)}
+      </ul>}
       {selectableMembers.length ? <div className="discord-send-recipients">
         {selectableMembers.map((member) => {
           const studentId = member.student_id!;

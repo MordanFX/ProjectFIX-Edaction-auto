@@ -32,6 +32,7 @@ def test_expected_tables_are_registered() -> None:
         "course_reminder_steps",
         "courses",
             "discord_homework_spaces",
+            "discord_invites",
             "discord_lesson_deliveries",
             "discord_lesson_dispatches",
             "discord_link_codes",

@@ -35,6 +35,7 @@ from course_platform.services.discord_dashboard import (
     DiscordMemberStatus,
     DiscordWorkspaceOverview,
 )
+from course_platform.services.discord_invites import DiscordInviteOverview
 from course_platform.services.discord_lesson_deliveries import (
     DiscordLessonDispatchOverview,
 )
@@ -250,6 +251,39 @@ class DiscordWorkspaceOverviewResponse(APIModel):
             unregistered_spaces=item.unregistered_spaces,
             submissions_enabled=item.submissions_enabled,
             members=[DiscordMemberOverviewResponse.from_domain(member) for member in item.members],
+        )
+
+
+class DiscordInviteCreateRequest(APIModel):
+    course_id: UUID | None = None
+    max_age_seconds: int = Field(default=86400, ge=300, le=604800)
+
+
+class DiscordInviteResponse(APIModel):
+    invite_id: UUID
+    guild_id: str
+    channel_id: str
+    code: str
+    invite_url: str
+    course_id: UUID | None
+    max_age_seconds: int
+    expires_at: datetime
+    created_at: datetime
+    status: str
+
+    @classmethod
+    def from_domain(cls, item: DiscordInviteOverview) -> "DiscordInviteResponse":
+        return cls(
+            invite_id=item.invite_id,
+            guild_id=str(item.guild_id),
+            channel_id=str(item.channel_id),
+            code=item.code,
+            invite_url=item.invite_url,
+            course_id=item.course_id,
+            max_age_seconds=item.max_age_seconds,
+            expires_at=item.expires_at,
+            created_at=item.created_at,
+            status=item.status,
         )
 
 

@@ -8,8 +8,10 @@ from course_platform.api.dependencies import (
     CurrentStaffDependency,
     DiscordAccessServiceDependency,
     DiscordDashboardServiceDependency,
+    DiscordInviteServiceDependency,
     DiscordLessonDeliveryServiceDependency,
     DiscordQuestionServiceDependency,
+    SessionDependency,
     SettingsDependency,
     StudentAccessServiceDependency,
 )
@@ -18,16 +20,81 @@ from course_platform.api.schemas import (
     DiscordAccessResponse,
     DiscordAccessSetExpiryRequest,
     DiscordCourseAssignmentRequest,
+    DiscordInviteCreateRequest,
+    DiscordInviteResponse,
     DiscordLessonDispatchCreateRequest,
     DiscordLessonDispatchResponse,
     DiscordQuestionResponse,
     DiscordWorkspaceOverviewResponse,
 )
+from course_platform.discord.api import DiscordAPIClient, DiscordAPIError
+from course_platform.models import Course
+from course_platform.models.enums import CourseAudience
 from course_platform.services.discord_access import DiscordAccessError
 from course_platform.services.discord_lesson_deliveries import DiscordLessonDispatchError
 from course_platform.services.students import StudentAccessError
 
 router = APIRouter(prefix="/discord", tags=["discord"])
+
+
+@router.post("/invites", response_model=DiscordInviteResponse)
+async def create_discord_invite(
+    payload: DiscordInviteCreateRequest,
+    staff: CurrentStaffDependency,
+    settings: SettingsDependency,
+    session: SessionDependency,
+    invites: DiscordInviteServiceDependency,
+) -> DiscordInviteResponse:
+    if settings.discord_bot_token is None:
+        raise HTTPException(status_code=400, detail="discord-bot-token-not-configured")
+    if settings.discord_guild_id is None:
+        raise HTTPException(status_code=400, detail="discord-guild-not-configured")
+    channel_id = settings.discord_invite_channel_id or settings.discord_homework_channel_id
+    if channel_id is None:
+        raise HTTPException(status_code=400, detail="discord-invite-channel-not-configured")
+    if payload.course_id is not None:
+        course = await session.get(Course, payload.course_id)
+        if course is None or course.audience is not CourseAudience.DISCORD:
+            raise HTTPException(status_code=400, detail="discord-course-not-found")
+    try:
+        async with DiscordAPIClient(settings.discord_bot_token) as api:
+            # Single-use invite: Discord itself expires it after the first join,
+            # so we never need to read invite usage (which would require the bot
+            # to hold Manage Server). The student opens /homework after joining.
+            invite = await api.create_channel_invite(
+                channel_id,
+                max_age=payload.max_age_seconds,
+                max_uses=1,
+            )
+    except DiscordAPIError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    code = str(invite["code"])
+    invite_url = str(invite.get("url") or f"https://discord.gg/{code}")
+    return DiscordInviteResponse.from_domain(
+        await invites.remember_invite(
+            guild_id=settings.discord_guild_id,
+            channel_id=channel_id,
+            code=code,
+            invite_url=invite_url,
+            course_id=payload.course_id,
+            created_by_staff_id=staff.id,
+            max_age_seconds=payload.max_age_seconds,
+        )
+    )
+
+
+@router.get("/invites", response_model=list[DiscordInviteResponse])
+async def list_discord_invites(
+    staff: CurrentStaffDependency,
+    settings: SettingsDependency,
+    invites: DiscordInviteServiceDependency,
+) -> list[DiscordInviteResponse]:
+    if settings.discord_guild_id is None:
+        return []
+    return [
+        DiscordInviteResponse.from_domain(item)
+        for item in await invites.list_invites(guild_id=settings.discord_guild_id)
+    ]
 
 
 @router.get("/accesses", response_model=list[DiscordAccessResponse])

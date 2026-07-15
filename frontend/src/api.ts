@@ -10,6 +10,7 @@ import type {
   CuratorReviewStats,
   DashboardSummary,
   DiscordAccess,
+  DiscordInvite,
   DiscordLessonDispatch,
   DiscordQuestion,
   DiscordWorkspaceOverview,
@@ -258,6 +259,23 @@ export function getDiscordOverview(): Promise<DiscordWorkspaceOverview> {
 
 export function getDiscordAccesses(): Promise<DiscordAccess[]> {
   return request<DiscordAccess[]>("/api/discord/accesses");
+}
+
+export function createDiscordInvite(payload: {
+  course_id?: string | null;
+  max_age_seconds?: number;
+} = {}): Promise<DiscordInvite> {
+  return request<DiscordInvite>("/api/discord/invites", {
+    method: "POST",
+    body: JSON.stringify({
+      course_id: payload.course_id ?? null,
+      max_age_seconds: payload.max_age_seconds ?? 86400,
+    }),
+  });
+}
+
+export function getDiscordInvites(): Promise<DiscordInvite[]> {
+  return request<DiscordInvite[]>("/api/discord/invites");
 }
 
 export function extendDiscordAccess(studentId: string, months: 1 | 3): Promise<DiscordAccess> {

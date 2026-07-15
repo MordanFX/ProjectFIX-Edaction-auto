@@ -19,6 +19,7 @@ from course_platform.services.admin_dashboard import AdminDashboardService
 from course_platform.services.course_admin import CourseAdminService
 from course_platform.services.discord_access import DiscordAccessService
 from course_platform.services.discord_dashboard import DiscordDashboardService
+from course_platform.services.discord_invites import DiscordInviteService
 from course_platform.services.discord_lesson_deliveries import DiscordLessonDeliveryService
 from course_platform.services.discord_questions import DiscordQuestionService
 from course_platform.services.reviews import ReviewService
@@ -63,6 +64,10 @@ def get_discord_dashboard_service(request: Request) -> DiscordDashboardService:
 
 def get_discord_access_service(request: Request) -> DiscordAccessService:
     return DiscordAccessService(get_session_factory(request))
+
+
+def get_discord_invite_service(request: Request) -> DiscordInviteService:
+    return DiscordInviteService(get_session_factory(request))
 
 
 def get_discord_lesson_delivery_service(request: Request) -> DiscordLessonDeliveryService:
@@ -122,6 +127,9 @@ DiscordDashboardServiceDependency = Annotated[
 ]
 DiscordAccessServiceDependency = Annotated[
     DiscordAccessService, Depends(get_discord_access_service)
+]
+DiscordInviteServiceDependency = Annotated[
+    DiscordInviteService, Depends(get_discord_invite_service)
 ]
 DiscordLessonDeliveryServiceDependency = Annotated[
     DiscordLessonDeliveryService, Depends(get_discord_lesson_delivery_service)

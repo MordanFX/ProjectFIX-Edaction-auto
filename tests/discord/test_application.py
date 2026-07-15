@@ -112,6 +112,7 @@ def interaction(name: str, options: list[dict[str, object]] | None = None):
         "id": "1",
         "token": "token",
         "application_id": "app",
+        "guild_id": "100",
         "member": {"user": {"id": "200", "username": "alex"}},
         "data": {"name": name, "options": options or []},
     }
@@ -426,3 +427,104 @@ async def test_lesson_delivery_is_sent_to_private_thread() -> None:
     assert deliveries.sent == [
         (UUID("00000000-0000-0000-0000-000000000001"), 300)
     ]
+
+
+async def test_setup_welcome_publishes_button_into_welcome_channel() -> None:
+    api = FakeAPI()
+    app = DiscordApplication(
+        api,  # type: ignore[arg-type]
+        "token",
+        100,
+        object(),  # type: ignore[arg-type]
+        FakeParticipantService(),  # type: ignore[arg-type]
+        welcome_channel_id=777,
+    )
+
+    await app._handle_interaction(interaction("setup_welcome"))  # noqa: SLF001
+
+    assert len(api.channel_messages) == 1
+    channel_id, payload = api.channel_messages[0]
+    assert channel_id == 777
+    button = payload["components"][0]["components"][0]  # type: ignore[index]
+    assert button["custom_id"] == "open_homework"
+    assert button["label"] == "Открыть моё пространство"
+
+
+async def test_setup_welcome_reports_unconfigured_channel() -> None:
+    api = FakeAPI()
+    app = DiscordApplication(
+        api,  # type: ignore[arg-type]
+        "token",
+        100,
+        object(),  # type: ignore[arg-type]
+        FakeParticipantService(),  # type: ignore[arg-type]
+    )
+
+    await app._handle_interaction(interaction("setup_welcome"))  # noqa: SLF001
+
+    assert api.channel_messages == []
+    assert "DISCORD_INVITE_CHANNEL_ID" in api.followups[0]
+
+
+async def test_welcome_button_click_opens_homework_space() -> None:
+    api = FakeAPI()
+    app = DiscordApplication(
+        api,  # type: ignore[arg-type]
+        "token",
+        100,
+        object(),  # type: ignore[arg-type]
+        FakeParticipantService(),  # type: ignore[arg-type]
+    )
+    opened: list[dict[str, object]] = []
+
+    async def fake_homework(payload: dict[str, object]) -> None:
+        opened.append(payload)
+
+    app._handle_homework = fake_homework  # type: ignore[method-assign]  # noqa: SLF001
+
+    await app._handle_interaction(  # noqa: SLF001
+        {
+            "id": "1",
+            "token": "token",
+            "application_id": "app",
+            "guild_id": "100",
+            "member": {"user": {"id": "200", "username": "alex"}},
+            "data": {"custom_id": "open_homework", "component_type": 2},
+        }
+    )
+
+    assert len(opened) == 1
+
+
+async def test_interaction_from_another_guild_is_ignored() -> None:
+    api = FakeAPI()
+    app = DiscordApplication(
+        api,  # type: ignore[arg-type]
+        "token",
+        100,
+        object(),  # type: ignore[arg-type]
+        FakeParticipantService(),  # type: ignore[arg-type]
+        welcome_channel_id=777,
+    )
+    opened: list[dict[str, object]] = []
+
+    async def fake_homework(payload: dict[str, object]) -> None:
+        opened.append(payload)
+
+    app._handle_homework = fake_homework  # type: ignore[method-assign]  # noqa: SLF001
+
+    # Same bot token can be connected to a staging guild; its clicks must not be
+    # served against the configured guild.
+    await app._handle_interaction(  # noqa: SLF001
+        {
+            "id": "1",
+            "token": "token",
+            "application_id": "app",
+            "guild_id": "999",
+            "member": {"user": {"id": "200", "username": "alex"}},
+            "data": {"custom_id": "open_homework", "component_type": 2},
+        }
+    )
+
+    assert opened == []
+    assert api.channel_messages == []

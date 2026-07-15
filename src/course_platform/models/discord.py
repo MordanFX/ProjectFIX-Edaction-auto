@@ -60,6 +60,35 @@ class DiscordLinkCode(PrimaryKeyMixin, TimestampMixin, Base):
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class DiscordInvite(PrimaryKeyMixin, TimestampMixin, Base):
+    """Onboarding link a curator created for a new Discord student.
+
+    Path 1 onboarding: the student joins with a plain Discord invite and then
+    opens ``/homework`` to create their private thread. We keep this record only
+    so a curator can see the links they handed out and not lose the URL. There
+    is deliberately no usage tracking here — that would require the bot to read
+    guild invites (``Manage Server``), which we do not grant.
+    """
+
+    __tablename__ = "discord_invites"
+    __table_args__ = (
+        UniqueConstraint("code", name="discord_invite_code"),
+    )
+
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    channel_id: Mapped[int] = mapped_column(BigInteger)
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    invite_url: Mapped[str] = mapped_column(String(255))
+    course_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("courses.id", ondelete="SET NULL"), index=True
+    )
+    max_age_seconds: Mapped[int] = mapped_column(default=86400, server_default="86400")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_by_staff_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("staff_users.id", ondelete="SET NULL"), index=True
+    )
+
+
 class DiscordHomeworkSpace(PrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "discord_homework_spaces"
     __table_args__ = (

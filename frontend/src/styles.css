@@ -248,6 +248,30 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .discord-compact-summary article:first-child span, .discord-compact-summary article:first-child small { color: #d7eaff; }
 .discord-compact-summary b { color: #f4f8fc; font-size: 32px; line-height: 1; }
 .discord-compact-summary small { color: #71869b; font-size: 9px; }
+.discord-invite-actions { display: flex; justify-content: flex-end; margin: 22px 0 -8px; }
+.discord-invite-button { min-height: 42px; padding: 0 18px; color: #fff; background: linear-gradient(135deg, #1d74df, #2d89ff); border: 1px solid #4a9dff; border-radius: 11px; box-shadow: 0 16px 40px rgb(24 111 220 / 22%); font-size: 12px; font-weight: 850; cursor: pointer; }
+.discord-invite-button:disabled { cursor: wait; opacity: .62; }
+.discord-invite-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 520px); gap: 18px; align-items: center; margin: 26px 0 0; padding: 18px; color: #dbe8f7; background: linear-gradient(135deg, #0d1b2b, #122842); border: 1px solid #294a6f; border-radius: 16px; }
+.discord-invite-panel h3 { margin: 4px 0 8px; color: #f5f9ff; font-size: 18px; }
+.discord-invite-panel p { margin: 0; color: #9eb2c7; font-size: 12px; line-height: 1.6; }
+.discord-invite-panel__link { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+.discord-invite-panel__link input { min-width: 0; height: 40px; padding: 0 12px; color: #eaf3ff; background: #081522; border: 1px solid #2e557a; border-radius: 10px; outline: none; }
+.discord-invite-panel__link button { padding: 0 14px; color: #dff0ff; background: #173556; border: 1px solid #356894; border-radius: 10px; font-size: 11px; font-weight: 850; cursor: pointer; }
+.discord-course-invite { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 16px 0; padding: 14px; background: #081522; border: 1px solid #244465; border-radius: 13px; }
+.discord-course-invite div { display: grid; gap: 5px; }
+.discord-course-invite strong { color: #f0f7ff; font-size: 13px; }
+.discord-course-invite span { color: #8fa6bd; font-size: 11px; line-height: 1.55; }
+.discord-course-invite button, .discord-course-invite-result button { min-height: 36px; padding: 0 13px; color: #fff; background: #1d74df; border: 1px solid #4092f0; border-radius: 9px; font-size: 11px; font-weight: 850; cursor: pointer; }
+.discord-course-invite button:disabled { cursor: wait; opacity: .62; }
+.discord-course-invite-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; margin: -4px 0 16px; padding: 12px; background: #0a1725; border: 1px solid #264a6b; border-radius: 12px; }
+.discord-course-invite-result input { min-width: 0; min-height: 36px; padding: 0 11px; color: #eaf4ff; background: #06111d; border: 1px solid #2d5275; border-radius: 9px; outline: none; }
+.discord-course-invite-result small, .discord-course-invite-result span { grid-column: 1 / -1; color: #93a8be; font-size: 10px; }
+.discord-invite-list { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 6px; }
+.discord-invite-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; background: #0a1725; border: 1px solid #22405f; border-radius: 9px; }
+.discord-invite-list__url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cfe0f2; font-size: 11px; }
+.discord-invite-list__status { flex: none; color: #6fd08a; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.discord-invite-list li.is-expired { opacity: .58; }
+.discord-invite-list li.is-expired .discord-invite-list__status { color: #8a97a6; }
 .discord-workflow { margin-bottom: 20px; overflow: hidden; color: #eaf1fb; background: #0c1827; border: 1px solid #2a4058; border-radius: 16px; }
 .discord-workflow > header { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 20px 22px 17px; background: linear-gradient(135deg, #11263e, #0d1b2c); border-bottom: 1px solid #2a4058; }
 .discord-workflow > header h2 { margin: 4px 0 0; font-size: 20px; }

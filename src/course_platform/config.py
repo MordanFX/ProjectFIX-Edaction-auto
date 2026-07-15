@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     discord_bot_token: SecretStr | None = None
     discord_guild_id: int | None = None
     discord_homework_channel_id: int | None = None
+    discord_invite_channel_id: int | None = None
     discord_staff_role_id: int | None = None
     discord_staff_role_ids: Annotated[tuple[int, ...], NoDecode] = ()
     discord_message_content_enabled: bool = False

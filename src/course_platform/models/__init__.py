@@ -3,6 +3,7 @@
 from course_platform.models.course import Assignment, Cohort, Course, Lesson, LessonMaterial
 from course_platform.models.discord import (
     DiscordHomeworkSpace,
+    DiscordInvite,
     DiscordLinkCode,
     DiscordParticipant,
     DiscordQuestion,
@@ -29,6 +30,7 @@ __all__ = [
     "Course",
     "CourseReminderStep",
     "DiscordHomeworkSpace",
+    "DiscordInvite",
     "DiscordLinkCode",
     "DiscordLessonDelivery",
     "DiscordLessonDispatch",

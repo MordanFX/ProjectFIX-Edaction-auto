@@ -37,6 +37,14 @@ from course_platform.services.submissions import (
 
 logger = logging.getLogger(__name__)
 
+OPEN_HOMEWORK_BUTTON = "open_homework"
+WELCOME_MESSAGE = (
+    "**Добро пожаловать в Project FIX!**\n\n"
+    "Нажми кнопку ниже — бот создаст твоё личное пространство "
+    "для домашних работ.\n"
+    "Его видишь только ты и кураторы. Другие ученики туда не попадут."
+)
+
 
 class DiscordApplication:
     def __init__(
@@ -53,6 +61,7 @@ class DiscordApplication:
         lesson_delivery_service: DiscordLessonDeliveryService | None = None,
         question_service: DiscordQuestionService | None = None,
         homework_channel_id: int | None = None,
+        welcome_channel_id: int | None = None,
         staff_role_id: int | None = None,
         staff_role_ids: tuple[int, ...] = (),
     ) -> None:
@@ -67,6 +76,7 @@ class DiscordApplication:
         self._lesson_delivery_service = lesson_delivery_service
         self._question_service = question_service
         self._homework_channel_id = homework_channel_id
+        self._welcome_channel_id = welcome_channel_id
         self._staff_role_ids = tuple(
             dict.fromkeys(
                 role_id
@@ -100,6 +110,12 @@ class DiscordApplication:
                 {
                     "name": "setup_project_fix",
                     "description": "Создать базовую структуру сервера Project FIX",
+                    "type": 1,
+                    "default_member_permissions": str(1 << 5),
+                },
+                {
+                    "name": "setup_welcome",
+                    "description": "Опубликовать приветствие с кнопкой в канале входа",
                     "type": 1,
                     "default_member_permissions": str(1 << 5),
                 },
@@ -263,6 +279,11 @@ class DiscordApplication:
                 )
 
     async def _handle_interaction(self, interaction: dict[str, Any]) -> None:
+        if int(interaction.get("guild_id", 0)) != self._guild_id:
+            # One bot token can sit in several guilds (e.g. a staging server), and the
+            # Gateway delivers every interaction to every session. Without this guard a
+            # click in another guild would be served against the configured guild.
+            return
         data = interaction.get("data") or {}
         if str(data.get("custom_id", "")).startswith("submit_discord:"):
             await self._handle_submission_confirmation(interaction)
@@ -270,8 +291,15 @@ class DiscordApplication:
         if str(data.get("custom_id", "")).startswith("ask_curator:"):
             await self._handle_question_confirmation(interaction)
             return
+        if data.get("custom_id") == OPEN_HOMEWORK_BUTTON:
+            # The welcome channel is read-only for students, so /homework cannot be
+            # typed there. A button click is not a message, so it works regardless.
+            await self._handle_homework(interaction)
+            return
         if data.get("name") == "setup_project_fix":
             await self._handle_setup(interaction)
+        elif data.get("name") == "setup_welcome":
+            await self._handle_setup_welcome(interaction)
         elif data.get("name") == "homework":
             await self._handle_homework(interaction)
 
@@ -544,6 +572,52 @@ class DiscordApplication:
         except Exception:
             logger.exception("Discord server setup failed")
             content = "Настройка не завершена. Проверь права приложения и журнал."
+        await self._api.followup(application_id, interaction_token, content)
+
+    async def _handle_setup_welcome(self, interaction: dict[str, Any]) -> None:
+        interaction_id = str(interaction["id"])
+        interaction_token = str(interaction["token"])
+        application_id = str(interaction["application_id"])
+        await self._api.respond_interaction(
+            interaction_id,
+            interaction_token,
+            "Публикую приветствие…",
+        )
+        if self._welcome_channel_id is None:
+            await self._api.followup(
+                application_id,
+                interaction_token,
+                "Канал входа не настроен. Задай DISCORD_INVITE_CHANNEL_ID.",
+            )
+            return
+        try:
+            await self._api.send_channel_message(
+                self._welcome_channel_id,
+                {
+                    "content": WELCOME_MESSAGE,
+                    "allowed_mentions": {"parse": []},
+                    "components": [
+                        {
+                            "type": 1,
+                            "components": [
+                                {
+                                    "type": 2,
+                                    "style": 1,
+                                    "label": "Открыть моё пространство",
+                                    "custom_id": OPEN_HOMEWORK_BUTTON,
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+            content = "Готово. Приветствие с кнопкой опубликовано в канале входа."
+        except Exception:
+            logger.exception("Discord welcome message publish failed")
+            content = (
+                "Не удалось опубликовать приветствие. Проверь, что боту разрешено "
+                "отправлять сообщения в канале входа."
+            )
         await self._api.followup(application_id, interaction_token, content)
 
     async def _handle_homework(self, interaction: dict[str, Any]) -> None:

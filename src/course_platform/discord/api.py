@@ -61,6 +61,26 @@ class DiscordAPIClient:
     async def guild_channels(self, guild_id: int) -> list[dict[str, Any]]:
         return await self.request("GET", f"guilds/{guild_id}/channels")
 
+    async def create_channel_invite(
+        self,
+        channel_id: int,
+        *,
+        max_age: int = 86400,
+        max_uses: int = 1,
+        temporary: bool = False,
+        unique: bool = True,
+    ) -> dict[str, Any]:
+        return await self.request(
+            "POST",
+            f"channels/{channel_id}/invites",
+            json={
+                "max_age": max_age,
+                "max_uses": max_uses,
+                "temporary": temporary,
+                "unique": unique,
+            },
+        )
+
     async def create_channel(self, guild_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return await self.request("POST", f"guilds/{guild_id}/channels", json=payload)
 
