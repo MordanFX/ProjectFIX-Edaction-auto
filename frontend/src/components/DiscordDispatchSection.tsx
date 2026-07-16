@@ -35,6 +35,15 @@ function inviteStatusLabel(status: string) {
   return "ждёт активации";
 }
 
+function formatInviteDate(value: string) {
+  return new Date(value).toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function DiscordDispatchSection({
   courses,
   members,
@@ -55,6 +64,7 @@ export function DiscordDispatchSection({
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [invite, setInvite] = useState<DiscordInviteCreated | null>(null);
   const [invites, setInvites] = useState<DiscordInvite[]>([]);
+  const [inviteHistoryOpen, setInviteHistoryOpen] = useState(false);
   const [inviteCopied, setInviteCopied] = useState(false);
   const [result, setResult] = useState<DiscordLessonDispatch | null>(null);
 
@@ -141,6 +151,22 @@ export function DiscordDispatchSection({
   const lessonSubmissions = useMemo(() => lesson && course
     ? submissions.filter((item) => item.course_title === course.title && item.lesson_position === lesson.position)
     : [], [course, lesson, submissions]);
+
+  // Live codes stay in sight — they can still be forwarded to a student.
+  // Everything else is history and hides behind a fold.
+  const pendingInvites = useMemo(() => invites.filter((item) => item.status === "active"), [invites]);
+  const historyInvites = useMemo(() => invites.filter((item) => item.status !== "active"), [invites]);
+
+  const inviteMeta = (item: DiscordInvite) => {
+    if (item.status === "used") {
+      const member = members.find((candidate) => candidate.discord_user_id === item.used_by_discord_user_id);
+      const name = member?.discord_display_name || member?.student_name;
+      const when = item.used_at ? formatInviteDate(item.used_at) : null;
+      return [name || "ученик", when].filter(Boolean).join(" · ");
+    }
+    if (item.status === "expired") return `истёк ${formatInviteDate(item.expires_at)}`;
+    return `действует до ${formatInviteDate(item.expires_at)}`;
+  };
 
   const selectableMembers = [...readyMembers, ...newCourseMembers];
   const selectableIds = selectableMembers.flatMap((member) => member.student_id ? [member.student_id] : []);
@@ -255,12 +281,26 @@ export function DiscordDispatchSection({
           <small>Код одноразовый, привязан к курсу и действует 24 часа. Он хранится в зашифрованном виде — если потеряешь, создай доступ заново. «Скопировать всё» кладёт в буфер готовое сообщение для ученика.</small>
         </> : <span>{inviteError}</span>}
       </div>}
-      {invites.length > 0 && <ul className="discord-invite-list">
-        {invites.slice(0, 6).map((item) => <li key={item.invite_id} className={`is-${item.status}`}>
+      {pendingInvites.length > 0 && <ul className="discord-invite-list">
+        {pendingInvites.map((item) => <li key={item.invite_id} className="is-active">
           <span className="discord-invite-list__url">{item.invite_url}</span>
+          <small className="discord-invite-list__meta">{inviteMeta(item)}</small>
           <span className="discord-invite-list__status">{inviteStatusLabel(item.status)}</span>
         </li>)}
       </ul>}
+      {historyInvites.length > 0 && <div className="discord-invite-history">
+        <button type="button" className="discord-invite-history__toggle" onClick={() => setInviteHistoryOpen((open) => !open)}>
+          <span>История доступов · {historyInvites.length}</span>
+          <i>{inviteHistoryOpen ? "▴" : "▾"}</i>
+        </button>
+        {inviteHistoryOpen && <ul className="discord-invite-list discord-invite-list--history">
+          {historyInvites.map((item) => <li key={item.invite_id} className={`is-${item.status}`}>
+            <span className="discord-invite-list__url">{item.invite_url}</span>
+            <small className="discord-invite-list__meta">{inviteMeta(item)}</small>
+            <span className="discord-invite-list__status">{inviteStatusLabel(item.status)}</span>
+          </li>)}
+        </ul>}
+      </div>}
       {selectableMembers.length ? <div className="discord-send-recipients">
         {selectableMembers.map((member) => {
           const studentId = member.student_id!;
