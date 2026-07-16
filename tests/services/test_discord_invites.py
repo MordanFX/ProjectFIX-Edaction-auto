@@ -75,6 +75,23 @@ async def test_code_cannot_be_redeemed_twice(session_factory) -> None:
         )
 
 
+async def test_release_lets_a_consumed_code_be_used_again(session_factory) -> None:
+    service = build_service(session_factory)
+    issued = await issue(service)
+    await service.redeem_access_code(
+        guild_id=10, code=issued.access_code, discord_user_id=30
+    )
+
+    # Space creation failed downstream: hand the code back so a retry works.
+    await service.release_access_code(invite_id=issued.invite.invite_id)
+
+    redeemed = await service.redeem_access_code(
+        guild_id=10, code=issued.access_code, discord_user_id=31
+    )
+    assert redeemed.status == "used"
+    assert redeemed.used_by_discord_user_id == 31
+
+
 async def test_redeem_accepts_sloppy_user_input(session_factory) -> None:
     service = build_service(session_factory)
     issued = await issue(service)

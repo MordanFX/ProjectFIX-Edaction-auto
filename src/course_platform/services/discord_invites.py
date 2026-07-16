@@ -133,6 +133,20 @@ class DiscordInviteService:
             await session.flush()
             return self._to_domain(model)
 
+    async def release_access_code(self, *, invite_id: UUID) -> None:
+        """Undo a redeem when the seat could not be delivered.
+
+        Space creation can still fail after the code is consumed (e.g. a Discord
+        permission gap). Giving the code back lets the student retry once the
+        cause is fixed, instead of burning a seat on a failure they can't fix.
+        """
+        async with session_scope(self._session_factory) as session:
+            model = await session.get(DiscordInvite, invite_id)
+            if model is not None:
+                model.used_at = None
+                model.used_by_discord_user_id = None
+                await session.flush()
+
     async def list_invites(self, *, guild_id: int) -> list[DiscordInviteOverview]:
         async with self._session_factory() as session:
             models = (

@@ -86,11 +86,15 @@ class FakeHomeworkService:
         return self.existing
 
 
+INVITE_ID = UUID("00000000-0000-0000-0000-0000000000cc")
+
+
 class FakeInviteService:
     def __init__(self, *, course_id: UUID | None = None, valid: bool = True) -> None:
         self.course_id = course_id
         self.valid = valid
         self.redeemed: list[dict[str, object]] = []
+        self.released: list[UUID] = []
 
     async def redeem_access_code(self, *, guild_id: int, code: str, discord_user_id: int):
         if not self.valid:
@@ -98,7 +102,10 @@ class FakeInviteService:
         self.redeemed.append(
             {"guild_id": guild_id, "code": code, "discord_user_id": discord_user_id}
         )
-        return SimpleNamespace(course_id=self.course_id)
+        return SimpleNamespace(invite_id=INVITE_ID, course_id=self.course_id)
+
+    async def release_access_code(self, *, invite_id: UUID) -> None:
+        self.released.append(invite_id)
 
 
 class FakeHomeworkManager:
@@ -764,3 +771,26 @@ async def test_returning_student_reopens_space_without_a_code() -> None:
     assert invites.redeemed == []
     assert len(app._homework_manager.created) == 1  # noqa: SLF001
     assert "<#300>" in api.followups[0]
+
+
+async def test_failed_space_creation_hands_the_access_code_back() -> None:
+    api = FakeAPI()
+    participants = FakeParticipantService()
+    invites = FakeInviteService(course_id=COURSE_ID)
+    app = build_homework_app(
+        api, participants=participants, homework_service=FakeHomeworkService(), invites=invites
+    )
+
+    class BoomManager:
+        async def get_or_create(self, **kwargs):
+            raise RuntimeError("discord permissions missing")
+
+    app._homework_manager = BoomManager()  # type: ignore[assignment]  # noqa: SLF001
+
+    await app._handle_interaction(modal_interaction("GOOD-CODE-HERE"))  # noqa: SLF001
+
+    # Code was consumed, but the thread failed — it must be released, not burned,
+    # so the student can retry once the permission gap is fixed.
+    assert invites.redeemed
+    assert invites.released == [INVITE_ID]
+    assert "Не удалось" in api.followups[-1]

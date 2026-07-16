@@ -837,6 +837,16 @@ class DiscordApplication:
                 )
         except Exception:
             logger.exception("Discord homework space creation failed")
+            if invite is not None and self._invite_service is not None:
+                # The code was consumed but the seat wasn't delivered — hand it
+                # back so the student can retry once the cause is fixed, instead
+                # of burning a code on a failure they can't do anything about.
+                try:
+                    await self._invite_service.release_access_code(
+                        invite_id=invite.invite_id
+                    )
+                except Exception:
+                    logger.exception("Discord access code release failed")
             content = (
                 "Не удалось открыть личное пространство. "
                 "Проверь права приложения или обратись к куратору."
