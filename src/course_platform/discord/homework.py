@@ -10,6 +10,7 @@ from course_platform.discord.setup import (
     ATTACH_FILES,
     CREATE_PRIVATE_THREADS,
     MANAGE_CHANNELS,
+    MANAGE_ROLES,
     MANAGE_THREADS,
     READ_MESSAGE_HISTORY,
     SEND_MESSAGES,
@@ -85,6 +86,11 @@ class DiscordHomeworkManager:
                 | SEND_MESSAGES_IN_THREADS
                 | MANAGE_THREADS
             )
+            # PUT replaces the bot's own overwrite wholesale, so this set must
+            # contain EVERY permission the bot relies on. Omitting MANAGE_ROLES
+            # here once made the bot strip its own "manage permissions" right on
+            # each run, breaking the student grant below with a 403 — and every
+            # manual re-grant was silently erased again on the next attempt.
             await self._api.set_member_channel_permissions(
                 desk_id,
                 self._bot_user_id,
@@ -92,9 +98,11 @@ class DiscordHomeworkManager:
                     VIEW_CHANNEL
                     | SEND_MESSAGES
                     | READ_MESSAGE_HISTORY
+                    | ATTACH_FILES
                     | CREATE_PRIVATE_THREADS
                     | SEND_MESSAGES_IN_THREADS
                     | MANAGE_THREADS
+                    | MANAGE_ROLES
                 ),
             )
             for role_id in self._staff_role_ids:
