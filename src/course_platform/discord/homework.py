@@ -1,5 +1,6 @@
 """Creation of isolated Discord homework spaces."""
 
+import logging
 import re
 from dataclasses import dataclass
 from uuid import UUID
@@ -20,6 +21,8 @@ from course_platform.services.discord_homework import (
     DiscordHomeworkService,
     HomeworkSpace,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,11 +98,25 @@ class DiscordHomeworkManager:
                 ),
             )
             for role_id in self._staff_role_ids:
-                await self._api.set_role_channel_permissions(
-                    desk_id,
-                    role_id,
-                    allow=staff_thread_access,
-                )
+                # Best-effort: a staff role positioned above the bot cannot be
+                # edited by it (Discord role hierarchy → 403). Curator access to
+                # the desk is a one-time channel setting, so a failure here must
+                # not abort the student's thread creation.
+                try:
+                    await self._api.set_role_channel_permissions(
+                        desk_id,
+                        role_id,
+                        allow=staff_thread_access,
+                    )
+                except DiscordAPIError as error:
+                    if error.status_code != 403:
+                        raise
+                    logger.warning(
+                        "Skipping staff role %s on desk %s (above bot in hierarchy): %s",
+                        role_id,
+                        desk_id,
+                        error,
+                    )
             # The desk is hidden from @everyone, so the student is let in one by
             # one. This must land before add_thread_member: a member who cannot
             # see the parent channel cannot be added to a thread under it. No
