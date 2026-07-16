@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_platform.db.session import session_scope
-from course_platform.models import Feedback, FeedbackAttachment, Submission
+from course_platform.models import Assignment, Feedback, FeedbackAttachment, Lesson, Submission
 from course_platform.models.enums import FeedbackVerdict, NotificationStatus, SubmissionSource
 
 
@@ -24,6 +24,11 @@ class DiscordFeedbackAttachment:
 class DiscordFeedbackNotification:
     feedback_id: UUID
     channel_id: int
+    # The student's own submission message: feedback is posted as a reply to it,
+    # so the verdict is visually tied to the work it judges.
+    source_message_id: int | None
+    lesson_position: int
+    lesson_title: str
     verdict: FeedbackVerdict
     message: str
     attachments: tuple[DiscordFeedbackAttachment, ...]
@@ -39,10 +44,15 @@ class DiscordFeedbackNotificationService:
                 select(
                     Feedback.id,
                     Submission.source_channel_id,
+                    Submission.source_message_id,
+                    Lesson.position,
+                    Lesson.title,
                     Feedback.verdict,
                     Feedback.message,
                 )
                 .join(Submission, Submission.id == Feedback.submission_id)
+                .join(Assignment, Assignment.id == Submission.assignment_id)
+                .join(Lesson, Lesson.id == Assignment.lesson_id)
                 .where(
                     Submission.source == SubmissionSource.DISCORD,
                     Submission.source_channel_id.is_not(None),
@@ -58,6 +68,9 @@ class DiscordFeedbackNotificationService:
                 DiscordFeedbackNotification(
                     feedback_id=row.id,
                     channel_id=row.source_channel_id,
+                    source_message_id=row.source_message_id,
+                    lesson_position=row.position,
+                    lesson_title=row.title,
                     verdict=row.verdict,
                     message=row.message,
                     attachments=(),
@@ -98,6 +111,9 @@ class DiscordFeedbackNotificationService:
                 DiscordFeedbackNotification(
                     feedback_id=item.feedback_id,
                     channel_id=item.channel_id,
+                    source_message_id=item.source_message_id,
+                    lesson_position=item.lesson_position,
+                    lesson_title=item.lesson_title,
                     verdict=item.verdict,
                     message=item.message,
                     attachments=tuple(by_feedback[item.feedback_id]),

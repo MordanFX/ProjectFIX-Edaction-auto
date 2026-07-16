@@ -350,7 +350,15 @@ export function DiscordDispatchSection({
 }
 
 function LessonPreview({ course, lesson }: { course: CourseContent; lesson: LessonContent }) {
-  return <article className="discord-send-preview__message"><span>Новый урок · {course.title}</span><h3>Урок {lesson.position}: {lesson.title}</h3>{lesson.description && <p>{lesson.description}</p>}<strong>Домашнее задание</strong><p>{lesson.assignment?.instructions}</p>{lesson.video_source === "external_url" && lesson.video_reference && <a href={lesson.video_reference} target="_blank" rel="noreferrer">Открыть материал ↗</a>}</article>;
+  return <article className="discord-send-preview__message">
+    <h3>📘 Урок {lesson.position} · {lesson.title}</h3>
+    <span>{course.title} · новый урок</span>
+    {lesson.description && <p>{lesson.description}</p>}
+    <strong>📝 Домашнее задание</strong>
+    <blockquote>{lesson.assignment?.instructions}</blockquote>
+    {lesson.video_source === "external_url" && lesson.video_reference && <a href={lesson.video_reference} target="_blank" rel="noreferrer">🎬 Смотреть материал →</a>}
+    <small className="discord-send-preview__guide">Как сдать: отправь ответ сообщением в эту ветку — под ним появится кнопка «Отправить на проверку».</small>
+  </article>;
 }
 
 function dispatchableLessons(course: CourseContent) {

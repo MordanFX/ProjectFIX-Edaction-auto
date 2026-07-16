@@ -91,7 +91,7 @@ async def test_creates_sends_and_tracks_lesson_dispatch(session_factory) -> None
     assert "Build the homework" in pending[0].content
     assert "https://example.test/video" in pending[0].content
     assert "Submit by Friday" in pending[0].content
-    assert "Как сдать работу" in pending[0].content
+    assert "Как сдать" in pending[0].content
     assert "Отправить на проверку" in pending[0].content
 
     await service.mark_sent(pending[0].delivery_id, discord_message_id=50)

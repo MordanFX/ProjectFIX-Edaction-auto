@@ -224,9 +224,9 @@ class DiscordApplication:
             if self._feedback_service is not None:
                 for item in await self._feedback_service.list_pending():
                     verdict = (
-                        "✅ Принято! Отличная работа"
+                        "### ✅ Принято! Отличная работа"
                         if item.verdict.value == "accepted"
-                        else "🔄 Нужно доработать — смотри комментарий ниже"
+                        else "### 🔄 Нужно доработать"
                     )
                     try:
                         local_attachments = [
@@ -240,15 +240,29 @@ class DiscordApplication:
                             if attachment.external_url is not None
                         ]
                         attachments_text = (
-                            "\n\n**Вложения куратора:**\n"
+                            "\n\n**📎 Вложения:**\n"
                             + "\n".join(attachment_lines)
                             if attachment_lines
                             else ""
                         )
-                        payload = {
-                            "content": f"**{verdict}**\n\n{item.message}{attachments_text}",
+                        subtext = (
+                            f"-# Урок {item.lesson_position} · {item.lesson_title}"
+                            " — ответ куратора"
+                        )
+                        quoted = _quote(item.message)
+                        payload: dict[str, Any] = {
+                            "content": f"{verdict}\n{subtext}\n\n{quoted}{attachments_text}",
                             "allowed_mentions": {"parse": []},
                         }
+                        if item.source_message_id is not None:
+                            # Reply to the student's own submission so the verdict
+                            # is visually pinned to the work it judges.
+                            payload["message_reference"] = {
+                                "message_id": str(item.source_message_id),
+                                "channel_id": str(item.channel_id),
+                                "guild_id": str(self._guild_id),
+                                "fail_if_not_exists": False,
+                            }
                         if local_attachments:
                             first_attachment = local_attachments[0]
                             await self._api.send_channel_message_file(
@@ -895,3 +909,8 @@ class DiscordApplication:
             return datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
+
+
+def _quote(text: str) -> str:
+    """Render text as a Discord block quote (every line prefixed with '> ')."""
+    return "\n".join(f"> {line}" if line else ">" for line in text.strip().splitlines())

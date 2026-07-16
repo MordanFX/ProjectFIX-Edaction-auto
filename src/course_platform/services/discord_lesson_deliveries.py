@@ -328,23 +328,28 @@ class DiscordLessonDeliveryService:
     ) -> str:
         parts = [
             f"<@{discord_user_id}>",
-            f"**Новый урок · {course_title}**\nУрок {lesson.position}: {lesson.title}",
+            f"### 📘 Урок {lesson.position} · {lesson.title}\n-# {course_title} · новый урок",
         ]
         if lesson.description:
             parts.append(lesson.description.strip())
-        parts.append(f"**Домашнее задание**\n{assignment.instructions.strip()}")
+        parts.append(f"**📝 Домашнее задание**\n{_quote(assignment.instructions)}")
         if lesson.video_source is VideoSource.EXTERNAL_URL and lesson.video_reference:
-            parts.append(f"Материал: {lesson.video_reference.strip()}")
+            # A masked link reads as an action, not as a raw URL dump; bots may
+            # use masked links in plain message content.
+            parts.append(f"🎬 **[Смотреть материал →]({lesson.video_reference.strip()})**")
         if custom_message:
-            parts.append(f"**Комментарий куратора**\n{custom_message}")
+            parts.append(f"**💬 Комментарий куратора**\n{_quote(custom_message)}")
         submission_guide = (
-            "**Как сдать работу**\n"
-            "1. Напишите ответ или прикрепите файл отдельным сообщением в этой ветке.\n"
-            "2. Под своим сообщением нажмите **«Отправить на проверку»**.\n"
-            "3. После подтверждения работа попадёт куратору на проверку."
+            "-# Как сдать: отправь ответ сообщением в эту ветку — "
+            "под ним появится кнопка «Отправить на проверку»."
         )
         content = "\n\n".join(parts)
         content_limit = 1950 - len(submission_guide) - 2
         if len(content) > content_limit:
             content = f"{content[: content_limit - 1]}…"
         return f"{content}\n\n{submission_guide}"
+
+
+def _quote(text: str) -> str:
+    """Render text as a Discord block quote (every line prefixed with '> ')."""
+    return "\n".join(f"> {line}" if line else ">" for line in text.strip().splitlines())
