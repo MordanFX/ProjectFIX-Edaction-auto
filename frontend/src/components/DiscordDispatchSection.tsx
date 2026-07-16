@@ -238,7 +238,7 @@ export function DiscordDispatchSection({
       <div className="discord-course-invite">
         <div>
           <strong>Новый ученик ещё не на сервере?</strong>
-          <span>Создай доступ для выбранного курса — получишь ссылку и персональный код. Ученик войдёт и активирует код командой <code>/homework</code>. Без кода пространство не откроется ни у кого.</span>
+          <span>Создай доступ для выбранного курса — получишь ссылку и персональный код. Ученик войдёт, нажмёт кнопку <b>«Получить доступ»</b> и введёт код — бот создаст его личное пространство. Без кода не откроется ни у кого.</span>
         </div>
         <button type="button" disabled={!courseId || inviteBusy} onClick={() => void generateInvite()}>
           {inviteBusy ? "Создаём…" : "Создать доступ"}
