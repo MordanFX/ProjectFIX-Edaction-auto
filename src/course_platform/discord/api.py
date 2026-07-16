@@ -198,6 +198,34 @@ class DiscordAPIClient:
             },
         )
 
+    async def respond_with_modal(
+        self,
+        interaction_id: str,
+        token: str,
+        *,
+        custom_id: str,
+        title: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        """Open a popup form in response to a click (interaction callback type 9).
+
+        A modal is the only way to collect typed input from a member who has no
+        Send Messages permission: the entry channel stays read-only, the code is
+        typed into this popup, not into the channel.
+        """
+        await self.request(
+            "POST",
+            f"interactions/{interaction_id}/{token}/callback",
+            json={
+                "type": 9,
+                "data": {
+                    "custom_id": custom_id,
+                    "title": title,
+                    "components": components,
+                },
+            },
+        )
+
     async def defer_message_update(self, interaction_id: str, token: str) -> None:
         """Acknowledge a component click without creating a visible message."""
         await self.request(

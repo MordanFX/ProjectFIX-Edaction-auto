@@ -12,6 +12,7 @@ import type {
   CourseContent,
   CourseOverview,
   DiscordInvite,
+  DiscordInviteCreated,
   DiscordLessonDispatch,
   DiscordMemberOverview,
   LessonContent,
@@ -26,6 +27,12 @@ interface DiscordDispatchSectionProps {
   onRequestHandled: () => void;
   onChanged: () => Promise<void>;
   onSelectSubmission: (item: ReviewQueueItem) => void;
+}
+
+function inviteStatusLabel(status: string) {
+  if (status === "used") return "активирован";
+  if (status === "expired") return "истёк";
+  return "ждёт активации";
 }
 
 export function DiscordDispatchSection({
@@ -46,7 +53,7 @@ export function DiscordDispatchSection({
   const [inviteBusy, setInviteBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
-  const [invite, setInvite] = useState<DiscordInvite | null>(null);
+  const [invite, setInvite] = useState<DiscordInviteCreated | null>(null);
   const [invites, setInvites] = useState<DiscordInvite[]>([]);
   const [inviteCopied, setInviteCopied] = useState(false);
   const [result, setResult] = useState<DiscordLessonDispatch | null>(null);
@@ -193,7 +200,17 @@ export function DiscordDispatchSection({
 
   async function copyInvite() {
     if (!invite) return;
-    await navigator.clipboard.writeText(invite.invite_url);
+    // The code is shown once, so hand the curator the whole message to forward
+    // rather than two fragments they have to assemble themselves.
+    const message = [
+      `Заходи на сервер: ${invite.invite_url}`,
+      "",
+      `Твой код доступа: ${invite.access_code}`,
+      "",
+      `После входа нажми кнопку «Получить доступ» и введи этот код —`,
+      `бот создаст твоё личное пространство для домашних работ.`,
+    ].join("\n");
+    await navigator.clipboard.writeText(message);
     setInviteCopied(true);
   }
 
@@ -221,23 +238,27 @@ export function DiscordDispatchSection({
       <div className="discord-course-invite">
         <div>
           <strong>Новый ученик ещё не на сервере?</strong>
-          <span>Создай одноразовую ссылку и отправь её ученику. После входа он открывает команду <code>/homework</code>, и бот создаёт его личную ветку. Тогда он появится в списке ниже.</span>
+          <span>Создай доступ для выбранного курса — получишь ссылку и персональный код. Ученик войдёт и активирует код командой <code>/homework</code>. Без кода пространство не откроется ни у кого.</span>
         </div>
         <button type="button" disabled={!courseId || inviteBusy} onClick={() => void generateInvite()}>
-          {inviteBusy ? "Создаём…" : "Создать invite-ссылку"}
+          {inviteBusy ? "Создаём…" : "Создать доступ"}
         </button>
       </div>
       {(invite || inviteError) && <div className="discord-course-invite-result">
         {invite ? <>
+          <div className="discord-invite-code">
+            <small>Код доступа — показывается один раз</small>
+            <b>{invite.access_code}</b>
+          </div>
           <input readOnly value={invite.invite_url} />
-          <button type="button" onClick={() => void copyInvite()}>{inviteCopied ? "Скопировано" : "Скопировать"}</button>
-          <small>Ссылка одноразовая (сгорает после первого входа) и действует 24 часа.</small>
+          <button type="button" onClick={() => void copyInvite()}>{inviteCopied ? "Скопировано" : "Скопировать всё"}</button>
+          <small>Код одноразовый, привязан к курсу и действует 24 часа. Он хранится в зашифрованном виде — если потеряешь, создай доступ заново. «Скопировать всё» кладёт в буфер готовое сообщение для ученика.</small>
         </> : <span>{inviteError}</span>}
       </div>}
       {invites.length > 0 && <ul className="discord-invite-list">
         {invites.slice(0, 6).map((item) => <li key={item.invite_id} className={`is-${item.status}`}>
           <span className="discord-invite-list__url">{item.invite_url}</span>
-          <span className="discord-invite-list__status">{item.status === "active" ? "активна" : "истекла"}</span>
+          <span className="discord-invite-list__status">{inviteStatusLabel(item.status)}</span>
         </li>)}
       </ul>}
       {selectableMembers.length ? <div className="discord-send-recipients">

@@ -1,83 +1,154 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from course_platform.models import DiscordInvite
-from course_platform.services.discord_invites import DiscordInviteService
+from course_platform.services.discord_invites import (
+    DiscordInviteService,
+    InvalidDiscordAccessCodeError,
+)
+
+SECRET = "test-invite-secret"
 
 
-async def test_remember_invite_stores_active_link(session_factory) -> None:
-    service = DiscordInviteService(session_factory)
+def build_service(session_factory) -> DiscordInviteService:
+    return DiscordInviteService(session_factory, SECRET)
 
-    invite = await service.remember_invite(
-        guild_id=10,
+
+async def issue(service: DiscordInviteService, *, guild_id: int = 10, code: str = "panel-code"):
+    return await service.remember_invite(
+        guild_id=guild_id,
         channel_id=20,
-        code="panel-code",
-        invite_url="https://discord.gg/panel-code",
+        code=code,
+        invite_url=f"https://discord.gg/{code}",
         course_id=None,
         created_by_staff_id=None,
     )
 
-    assert invite.status == "active"
-    assert invite.code == "panel-code"
-    assert invite.invite_url == "https://discord.gg/panel-code"
-    assert invite.created_at is not None
+
+async def test_issued_invite_returns_plaintext_code_once(session_factory) -> None:
+    service = build_service(session_factory)
+
+    issued = await issue(service)
+
+    assert issued.invite.status == "active"
+    assert issued.access_code
+    # Formatted in readable groups, and never stored in the clear.
+    assert issued.access_code.count("-") == 2
+    invites = await service.list_invites(guild_id=10)
+    assert not hasattr(invites[0], "access_code")
 
 
-async def test_list_invites_orders_newest_first_and_flags_expired(
-    session_factory,
-) -> None:
-    service = DiscordInviteService(session_factory)
-    await service.remember_invite(
-        guild_id=10,
-        channel_id=20,
-        code="fresh",
-        invite_url="https://discord.gg/fresh",
-        course_id=None,
-        created_by_staff_id=None,
+async def test_access_codes_are_unique_per_seat(session_factory) -> None:
+    service = build_service(session_factory)
+
+    first = await issue(service, code="a")
+    second = await issue(service, code="b")
+
+    assert first.access_code != second.access_code
+
+
+async def test_redeem_consumes_code_and_records_student(session_factory) -> None:
+    service = build_service(session_factory)
+    issued = await issue(service)
+
+    redeemed = await service.redeem_access_code(
+        guild_id=10, code=issued.access_code, discord_user_id=30
     )
 
-    # An already-expired link should still be listed, marked as expired.
-    async with session_factory() as session:
-        session.add(
-            DiscordInvite(
-                guild_id=10,
-                channel_id=20,
-                code="stale",
-                invite_url="https://discord.gg/stale",
-                course_id=None,
-                created_by_staff_id=None,
-                max_age_seconds=300,
-                expires_at=datetime.now(UTC) - timedelta(minutes=5),
-            )
+    assert redeemed.invite_id == issued.invite.invite_id
+    assert redeemed.status == "used"
+    assert redeemed.used_by_discord_user_id == 30
+
+
+async def test_code_cannot_be_redeemed_twice(session_factory) -> None:
+    service = build_service(session_factory)
+    issued = await issue(service)
+    await service.redeem_access_code(
+        guild_id=10, code=issued.access_code, discord_user_id=30
+    )
+
+    # A student must not be able to pass their code on to a friend.
+    with pytest.raises(InvalidDiscordAccessCodeError):
+        await service.redeem_access_code(
+            guild_id=10, code=issued.access_code, discord_user_id=31
         )
+
+
+async def test_redeem_accepts_sloppy_user_input(session_factory) -> None:
+    service = build_service(session_factory)
+    issued = await issue(service)
+
+    messy = f"  {issued.access_code.lower().replace('-', ' ')}  "
+    redeemed = await service.redeem_access_code(
+        guild_id=10, code=messy, discord_user_id=30
+    )
+
+    assert redeemed.status == "used"
+
+
+async def test_unknown_code_is_rejected(session_factory) -> None:
+    service = build_service(session_factory)
+    await issue(service)
+
+    with pytest.raises(InvalidDiscordAccessCodeError):
+        await service.redeem_access_code(
+            guild_id=10, code="ZZZZ-ZZZZ-ZZZZ", discord_user_id=30
+        )
+
+
+async def test_code_from_another_guild_is_rejected(session_factory) -> None:
+    service = build_service(session_factory)
+    issued = await issue(service, guild_id=99)
+
+    with pytest.raises(InvalidDiscordAccessCodeError):
+        await service.redeem_access_code(
+            guild_id=10, code=issued.access_code, discord_user_id=30
+        )
+
+
+async def test_expired_code_is_rejected(session_factory) -> None:
+    service = build_service(session_factory)
+    issued = await issue(service)
+
+    async with session_factory() as session:
+        model = await session.get(DiscordInvite, issued.invite.invite_id)
+        model.expires_at = datetime.now(UTC) - timedelta(minutes=1)
         await session.commit()
 
-    invites = await service.list_invites(guild_id=10)
-
-    assert {item.code for item in invites} == {"fresh", "stale"}
-    by_code = {item.code: item for item in invites}
-    assert by_code["fresh"].status == "active"
-    assert by_code["stale"].status == "expired"
+    with pytest.raises(InvalidDiscordAccessCodeError):
+        await service.redeem_access_code(
+            guild_id=10, code=issued.access_code, discord_user_id=30
+        )
 
 
-async def test_list_invites_is_scoped_by_guild(session_factory) -> None:
-    service = DiscordInviteService(session_factory)
-    await service.remember_invite(
-        guild_id=10,
-        channel_id=20,
-        code="ours",
-        invite_url="https://discord.gg/ours",
-        course_id=None,
-        created_by_staff_id=None,
-    )
-    await service.remember_invite(
-        guild_id=99,
-        channel_id=20,
-        code="theirs",
-        invite_url="https://discord.gg/theirs",
-        course_id=None,
-        created_by_staff_id=None,
+async def test_code_issued_under_another_secret_is_rejected(session_factory) -> None:
+    issued = await issue(build_service(session_factory))
+    impostor = DiscordInviteService(session_factory, "different-secret")
+
+    with pytest.raises(InvalidDiscordAccessCodeError):
+        await impostor.redeem_access_code(
+            guild_id=10, code=issued.access_code, discord_user_id=30
+        )
+
+
+async def test_list_invites_reports_status_and_scope(session_factory) -> None:
+    service = build_service(session_factory)
+    fresh = await issue(service, code="fresh")
+    await issue(service, guild_id=99, code="other-guild")
+    used = await issue(service, code="used")
+    await service.redeem_access_code(
+        guild_id=10, code=used.access_code, discord_user_id=30
     )
 
-    invites = await service.list_invites(guild_id=10)
+    async with session_factory() as session:
+        model = await session.get(DiscordInvite, fresh.invite.invite_id)
+        model.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        await session.commit()
 
-    assert [item.code for item in invites] == ["ours"]
+    invites = {item.code: item for item in await service.list_invites(guild_id=10)}
+
+    assert set(invites) == {"fresh", "used"}
+    assert invites["fresh"].status == "expired"
+    assert invites["used"].status == "used"
+    assert invites["used"].used_by_discord_user_id == 30

@@ -61,24 +61,30 @@ class DiscordLinkCode(PrimaryKeyMixin, TimestampMixin, Base):
 
 
 class DiscordInvite(PrimaryKeyMixin, TimestampMixin, Base):
-    """Onboarding link a curator created for a new Discord student.
+    """A curator-issued seat: a Discord invite link plus a personal access code.
 
-    Path 1 onboarding: the student joins with a plain Discord invite and then
-    opens ``/homework`` to create their private thread. We keep this record only
-    so a curator can see the links they handed out and not lose the URL. There
-    is deliberately no usage tracking here — that would require the bot to read
-    guild invites (``Manage Server``), which we do not grant.
+    The invite link only gets someone onto the guild; it carries no identity, so
+    it cannot gate anything on its own. The gate is ``access_code_digest``: the
+    student presents the code to ``/homework`` and the bot grants that one member
+    access to the homework channel. Because the student hands us the code, we
+    never read Discord's own invite usage — that would need ``Manage Server``,
+    which we do not grant.
+
+    Only the HMAC digest is stored, so a leaked table yields no usable codes. The
+    plaintext code is shown once, at creation.
     """
 
     __tablename__ = "discord_invites"
     __table_args__ = (
         UniqueConstraint("code", name="discord_invite_code"),
+        UniqueConstraint("access_code_digest", name="discord_invite_access_code"),
     )
 
     guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
     channel_id: Mapped[int] = mapped_column(BigInteger)
     code: Mapped[str] = mapped_column(String(64), index=True)
     invite_url: Mapped[str] = mapped_column(String(255))
+    access_code_digest: Mapped[str] = mapped_column(String(64), index=True)
     course_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("courses.id", ondelete="SET NULL"), index=True
     )
@@ -87,6 +93,8 @@ class DiscordInvite(PrimaryKeyMixin, TimestampMixin, Base):
     created_by_staff_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("staff_users.id", ondelete="SET NULL"), index=True
     )
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    used_by_discord_user_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
 
 
 class DiscordHomeworkSpace(PrimaryKeyMixin, TimestampMixin, Base):

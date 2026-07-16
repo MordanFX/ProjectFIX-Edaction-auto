@@ -8,17 +8,21 @@ from course_platform.db.session import create_engine, create_session_factory
 from course_platform.discord.api import DiscordAPIClient
 from course_platform.discord.application import DiscordApplication
 from course_platform.services.discord_homework import DiscordHomeworkService
+from course_platform.services.discord_invites import DiscordInviteService
 from course_platform.services.discord_lesson_deliveries import DiscordLessonDeliveryService
 from course_platform.services.discord_notifications import DiscordFeedbackNotificationService
 from course_platform.services.discord_participants import DiscordParticipantService
 from course_platform.services.discord_questions import DiscordQuestionService
 from course_platform.services.discord_submissions import DiscordSubmissionService
+from course_platform.services.students import StudentAccessService
 
 
 async def main() -> None:
     settings = get_settings()
     if settings.discord_bot_token is None or settings.discord_guild_id is None:
         raise SystemExit("DISCORD_BOT_TOKEN and DISCORD_GUILD_ID are required")
+    if settings.jwt_secret is None:
+        raise SystemExit("JWT_SECRET is required to verify Discord access codes")
     token = settings.discord_bot_token.get_secret_value()
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
@@ -31,6 +35,8 @@ async def main() -> None:
                 DiscordHomeworkService(session_factory),
                 DiscordParticipantService(session_factory),
                 DiscordSubmissionService(session_factory),
+                invite_service=DiscordInviteService(session_factory, settings.jwt_secret),
+                student_access_service=StudentAccessService(session_factory),
                 message_content_enabled=settings.discord_message_content_enabled,
                 feedback_service=DiscordFeedbackNotificationService(session_factory),
                 lesson_delivery_service=DiscordLessonDeliveryService(session_factory),

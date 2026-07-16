@@ -67,7 +67,13 @@ def get_discord_access_service(request: Request) -> DiscordAccessService:
 
 
 def get_discord_invite_service(request: Request) -> DiscordInviteService:
-    return DiscordInviteService(get_session_factory(request))
+    settings = get_api_settings(request)
+    if settings.jwt_secret is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="jwt-secret-not-configured",
+        )
+    return DiscordInviteService(get_session_factory(request), settings.jwt_secret)
 
 
 def get_discord_lesson_delivery_service(request: Request) -> DiscordLessonDeliveryService:

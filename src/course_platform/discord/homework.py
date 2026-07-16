@@ -100,6 +100,20 @@ class DiscordHomeworkManager:
                     role_id,
                     allow=staff_thread_access,
                 )
+            # The desk is hidden from @everyone, so the student is let in one by
+            # one. This must land before add_thread_member: a member who cannot
+            # see the parent channel cannot be added to a thread under it. No
+            # Send Messages — the student talks in their own thread, not the desk.
+            await self._api.set_member_channel_permissions(
+                desk_id,
+                discord_user_id,
+                allow=(
+                    VIEW_CHANNEL
+                    | READ_MESSAGE_HISTORY
+                    | SEND_MESSAGES_IN_THREADS
+                    | ATTACH_FILES
+                ),
+            )
             channel = await self._api.create_private_thread(desk_id, name)
             await self._api.add_thread_member(int(channel["id"]), discord_user_id)
             parent_channel_id = desk_id

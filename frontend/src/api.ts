@@ -11,6 +11,7 @@ import type {
   DashboardSummary,
   DiscordAccess,
   DiscordInvite,
+  DiscordInviteCreated,
   DiscordLessonDispatch,
   DiscordQuestion,
   DiscordWorkspaceOverview,
@@ -264,8 +265,8 @@ export function getDiscordAccesses(): Promise<DiscordAccess[]> {
 export function createDiscordInvite(payload: {
   course_id?: string | null;
   max_age_seconds?: number;
-} = {}): Promise<DiscordInvite> {
-  return request<DiscordInvite>("/api/discord/invites", {
+} = {}): Promise<DiscordInviteCreated> {
+  return request<DiscordInviteCreated>("/api/discord/invites", {
     method: "POST",
     body: JSON.stringify({
       course_id: payload.course_id ?? null,

@@ -35,7 +35,10 @@ from course_platform.services.discord_dashboard import (
     DiscordMemberStatus,
     DiscordWorkspaceOverview,
 )
-from course_platform.services.discord_invites import DiscordInviteOverview
+from course_platform.services.discord_invites import (
+    DiscordInviteOverview,
+    IssuedDiscordInvite,
+)
 from course_platform.services.discord_lesson_deliveries import (
     DiscordLessonDispatchOverview,
 )
@@ -269,6 +272,8 @@ class DiscordInviteResponse(APIModel):
     max_age_seconds: int
     expires_at: datetime
     created_at: datetime
+    used_at: datetime | None
+    used_by_discord_user_id: str | None
     status: str
 
     @classmethod
@@ -283,8 +288,26 @@ class DiscordInviteResponse(APIModel):
             max_age_seconds=item.max_age_seconds,
             expires_at=item.expires_at,
             created_at=item.created_at,
+            used_at=item.used_at,
+            used_by_discord_user_id=(
+                str(item.used_by_discord_user_id)
+                if item.used_by_discord_user_id is not None
+                else None
+            ),
             status=item.status,
         )
+
+
+class DiscordInviteCreatedResponse(DiscordInviteResponse):
+    """Creation response. ``access_code`` is plaintext and returned only here —
+    only its digest is stored, so it cannot be shown again later."""
+
+    access_code: str
+
+    @classmethod
+    def from_issued(cls, issued: IssuedDiscordInvite) -> "DiscordInviteCreatedResponse":
+        base = DiscordInviteResponse.from_domain(issued.invite)
+        return cls(**base.model_dump(), access_code=issued.access_code)
 
 
 class DiscordLessonDispatchCreateRequest(APIModel):

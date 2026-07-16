@@ -180,7 +180,14 @@ export interface DiscordInvite {
   max_age_seconds: number;
   expires_at: string;
   created_at: string;
-  status: "active" | "expired" | string;
+  used_at: string | null;
+  used_by_discord_user_id: string | null;
+  status: "active" | "used" | "expired" | string;
+}
+
+/** Creation response only: the access code is stored hashed and never returned again. */
+export interface DiscordInviteCreated extends DiscordInvite {
+  access_code: string;
 }
 
 export interface DiscordLessonDispatch {

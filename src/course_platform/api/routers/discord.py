@@ -20,6 +20,7 @@ from course_platform.api.schemas import (
     DiscordAccessResponse,
     DiscordAccessSetExpiryRequest,
     DiscordCourseAssignmentRequest,
+    DiscordInviteCreatedResponse,
     DiscordInviteCreateRequest,
     DiscordInviteResponse,
     DiscordLessonDispatchCreateRequest,
@@ -37,14 +38,14 @@ from course_platform.services.students import StudentAccessError
 router = APIRouter(prefix="/discord", tags=["discord"])
 
 
-@router.post("/invites", response_model=DiscordInviteResponse)
+@router.post("/invites", response_model=DiscordInviteCreatedResponse)
 async def create_discord_invite(
     payload: DiscordInviteCreateRequest,
     staff: CurrentStaffDependency,
     settings: SettingsDependency,
     session: SessionDependency,
     invites: DiscordInviteServiceDependency,
-) -> DiscordInviteResponse:
+) -> DiscordInviteCreatedResponse:
     if settings.discord_bot_token is None:
         raise HTTPException(status_code=400, detail="discord-bot-token-not-configured")
     if settings.discord_guild_id is None:
@@ -60,7 +61,8 @@ async def create_discord_invite(
         async with DiscordAPIClient(settings.discord_bot_token) as api:
             # Single-use invite: Discord itself expires it after the first join,
             # so we never need to read invite usage (which would require the bot
-            # to hold Manage Server). The student opens /homework after joining.
+            # to hold Manage Server). The link only opens the door to the guild —
+            # the access code returned below is what actually grants a seat.
             invite = await api.create_channel_invite(
                 channel_id,
                 max_age=payload.max_age_seconds,
@@ -70,7 +72,7 @@ async def create_discord_invite(
         raise HTTPException(status_code=400, detail=str(error)) from None
     code = str(invite["code"])
     invite_url = str(invite.get("url") or f"https://discord.gg/{code}")
-    return DiscordInviteResponse.from_domain(
+    return DiscordInviteCreatedResponse.from_issued(
         await invites.remember_invite(
             guild_id=settings.discord_guild_id,
             channel_id=channel_id,

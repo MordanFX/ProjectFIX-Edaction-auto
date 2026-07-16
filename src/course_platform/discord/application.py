@@ -14,6 +14,10 @@ from course_platform.discord.api import DiscordAPIClient
 from course_platform.discord.homework import DiscordHomeworkManager
 from course_platform.discord.setup import ProjectFixServerSetup
 from course_platform.services.discord_homework import DiscordHomeworkService
+from course_platform.services.discord_invites import (
+    DiscordInviteService,
+    InvalidDiscordAccessCodeError,
+)
 from course_platform.services.discord_lesson_deliveries import DiscordLessonDeliveryService
 from course_platform.services.discord_notifications import DiscordFeedbackNotificationService
 from course_platform.services.discord_participants import DiscordParticipantService
@@ -27,6 +31,7 @@ from course_platform.services.discord_submissions import (
     DiscordSubmissionAccessError,
     DiscordSubmissionService,
 )
+from course_platform.services.students import StudentAccessError, StudentAccessService
 from course_platform.services.submissions import (
     AssignmentAcceptedError,
     EmptySubmissionError,
@@ -38,11 +43,24 @@ from course_platform.services.submissions import (
 logger = logging.getLogger(__name__)
 
 OPEN_HOMEWORK_BUTTON = "open_homework"
+HOMEWORK_CODE_MODAL = "homework_code_modal"
+ACCESS_CODE_INPUT = "access_code"
+ACCESS_CODE_OPTION = "code"
+HOMEWORK_BUTTON_LABEL = "Получить доступ"
+ACCESS_CODE_REQUIRED = (
+    "Нужен код доступа — его выдаёт куратор вместе со ссылкой на сервер.\n"
+    "Нажми кнопку «Получить доступ» в канале входа и введи код."
+)
+ACCESS_CODE_INVALID = (
+    "Код не подошёл: он неверный, уже использован или истёк.\n"
+    "Обратись к куратору за новым."
+)
 WELCOME_MESSAGE = (
     "**Добро пожаловать в Project FIX!**\n\n"
-    "Нажми кнопку ниже — бот создаст твоё личное пространство "
-    "для домашних работ.\n"
-    "Его видишь только ты и кураторы. Другие ученики туда не попадут."
+    "Куратор выдал тебе персональный код доступа. Нажми кнопку ниже, "
+    "введи код — и бот создаст твоё личное пространство для домашних работ: "
+    "его видишь только ты и кураторы.\n\n"
+    "Уже занимаешься? Нажми ту же кнопку — она откроет твою ветку."
 )
 
 
@@ -56,6 +74,8 @@ class DiscordApplication:
         participant_service: DiscordParticipantService,
         submission_service: DiscordSubmissionService | None = None,
         *,
+        invite_service: DiscordInviteService | None = None,
+        student_access_service: StudentAccessService | None = None,
         message_content_enabled: bool = False,
         feedback_service: DiscordFeedbackNotificationService | None = None,
         lesson_delivery_service: DiscordLessonDeliveryService | None = None,
@@ -71,6 +91,8 @@ class DiscordApplication:
         self._homework_service = homework_service
         self._participant_service = participant_service
         self._submission_service = submission_service
+        self._invite_service = invite_service
+        self._student_access_service = student_access_service
         self._message_content_enabled = message_content_enabled
         self._feedback_service = feedback_service
         self._lesson_delivery_service = lesson_delivery_service
@@ -123,6 +145,14 @@ class DiscordApplication:
                     "name": "homework",
                     "description": "Открыть личное пространство для домашних работ",
                     "type": 1,
+                    "options": [
+                        {
+                            "name": ACCESS_CODE_OPTION,
+                            "description": "Код доступа от куратора (нужен только в первый раз)",
+                            "type": 3,
+                            "required": False,
+                        }
+                    ],
                 },
             ],
         )
@@ -285,16 +315,21 @@ class DiscordApplication:
             # click in another guild would be served against the configured guild.
             return
         data = interaction.get("data") or {}
-        if str(data.get("custom_id", "")).startswith("submit_discord:"):
+        custom_id = str(data.get("custom_id", ""))
+        if interaction.get("type") == 5:  # MODAL_SUBMIT
+            if custom_id == HOMEWORK_CODE_MODAL:
+                await self._handle_homework_modal(interaction)
+            return
+        if custom_id.startswith("submit_discord:"):
             await self._handle_submission_confirmation(interaction)
             return
-        if str(data.get("custom_id", "")).startswith("ask_curator:"):
+        if custom_id.startswith("ask_curator:"):
             await self._handle_question_confirmation(interaction)
             return
-        if data.get("custom_id") == OPEN_HOMEWORK_BUTTON:
+        if custom_id == OPEN_HOMEWORK_BUTTON:
             # The welcome channel is read-only for students, so /homework cannot be
             # typed there. A button click is not a message, so it works regardless.
-            await self._handle_homework(interaction)
+            await self._handle_homework_button(interaction)
             return
         if data.get("name") == "setup_project_fix":
             await self._handle_setup(interaction)
@@ -603,7 +638,7 @@ class DiscordApplication:
                                 {
                                     "type": 2,
                                     "style": 1,
-                                    "label": "Открыть моё пространство",
+                                    "label": HOMEWORK_BUTTON_LABEL,
                                     "custom_id": OPEN_HOMEWORK_BUTTON,
                                 }
                             ],
@@ -621,6 +656,11 @@ class DiscordApplication:
         await self._api.followup(application_id, interaction_token, content)
 
     async def _handle_homework(self, interaction: dict[str, Any]) -> None:
+        """Slash-command entry — a fallback for staff/testing.
+
+        In the closed setup students never type this (channels are read-only);
+        they come through the button + code modal instead.
+        """
         interaction_id = str(interaction["id"])
         interaction_token = str(interaction["token"])
         application_id = str(interaction["application_id"])
@@ -629,12 +669,119 @@ class DiscordApplication:
             interaction_token,
             "Открываю личное пространство…",
         )
+        await self._provision_homework(
+            interaction,
+            application_id=application_id,
+            interaction_token=interaction_token,
+            code=self._string_option(interaction, ACCESS_CODE_OPTION),
+        )
 
+    async def _handle_homework_button(self, interaction: dict[str, Any]) -> None:
+        interaction_id = str(interaction["id"])
+        interaction_token = str(interaction["token"])
+        application_id = str(interaction["application_id"])
+        member = interaction.get("member") or {}
+        user = member.get("user") or interaction.get("user") or {}
+        user_id = int(user["id"])
+        # Returning students already have a space — reopen it, no code needed.
+        # A new student must prove a paid seat: pop a modal to type the one-time
+        # code. The modal must be this interaction's first (and only) response,
+        # so the find() check has to happen before we acknowledge anything.
+        if await self._homework_service.find(self._guild_id, user_id) is not None:
+            await self._api.respond_interaction(
+                interaction_id,
+                interaction_token,
+                "Открываю личное пространство…",
+            )
+            await self._provision_homework(
+                interaction,
+                application_id=application_id,
+                interaction_token=interaction_token,
+                code=None,
+            )
+            return
+        await self._api.respond_with_modal(
+            interaction_id,
+            interaction_token,
+            custom_id=HOMEWORK_CODE_MODAL,
+            title="Код доступа",
+            components=[
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 4,  # text input
+                            "custom_id": ACCESS_CODE_INPUT,
+                            "style": 1,  # short, single line
+                            "label": "Введи код от куратора",
+                            "min_length": 4,
+                            "max_length": 32,
+                            "placeholder": "ABCD-EFGH-JKLM",
+                            "required": True,
+                        }
+                    ],
+                }
+            ],
+        )
+
+    async def _handle_homework_modal(self, interaction: dict[str, Any]) -> None:
+        interaction_id = str(interaction["id"])
+        interaction_token = str(interaction["token"])
+        application_id = str(interaction["application_id"])
+        await self._api.respond_interaction(
+            interaction_id,
+            interaction_token,
+            "Проверяю код доступа…",
+        )
+        await self._provision_homework(
+            interaction,
+            application_id=application_id,
+            interaction_token=interaction_token,
+            code=self._modal_value(interaction, ACCESS_CODE_INPUT),
+        )
+
+    async def _provision_homework(
+        self,
+        interaction: dict[str, Any],
+        *,
+        application_id: str,
+        interaction_token: str,
+        code: str | None,
+    ) -> None:
+        """Gate on the access code, then open (or reopen) the private space.
+
+        Callers must have already acknowledged the interaction; this method only
+        posts the ephemeral follow-up with the result.
+        """
         member = interaction.get("member") or {}
         user = member.get("user") or interaction.get("user") or {}
         user_id = int(user["id"])
         display_name = self._display_name(member, user, user_id)
         try:
+            # A student who already has a space just reopens it. Opening a *new*
+            # one costs a one-time access code: the desk is hidden from
+            # @everyone, and the code is what proves this member paid for a seat.
+            invite = None
+            if await self._homework_service.find(self._guild_id, user_id) is None:
+                if not code:
+                    await self._api.followup(
+                        application_id, interaction_token, ACCESS_CODE_REQUIRED
+                    )
+                    return
+                if self._invite_service is None:
+                    raise RuntimeError("Discord invite service is not initialized")
+                try:
+                    invite = await self._invite_service.redeem_access_code(
+                        guild_id=self._guild_id,
+                        code=code,
+                        discord_user_id=user_id,
+                    )
+                except InvalidDiscordAccessCodeError:
+                    await self._api.followup(
+                        application_id, interaction_token, ACCESS_CODE_INVALID
+                    )
+                    return
+
             participant = await self._participant_service.get_or_create(
                 guild_id=self._guild_id,
                 discord_user_id=user_id,
@@ -652,6 +799,18 @@ class DiscordApplication:
                 display_name=display_name,
                 student_id=participant.student_id,
             )
+            if (
+                invite is not None
+                and invite.course_id is not None
+                and self._student_access_service is not None
+            ):
+                try:
+                    await self._student_access_service.assign_discord_course(
+                        student_id=participant.student_id,
+                        course_id=invite.course_id,
+                    )
+                except StudentAccessError:
+                    logger.exception("Discord access code course assignment failed")
             action = "создано" if result.created else "уже было создано"
             assignment = (
                 await self._submission_service.current_assignment(
@@ -683,6 +842,23 @@ class DiscordApplication:
                 "Проверь права приложения или обратись к куратору."
             )
         await self._api.followup(application_id, interaction_token, content)
+
+    @staticmethod
+    def _string_option(interaction: dict[str, Any], name: str) -> str | None:
+        data = interaction.get("data") or {}
+        for option in data.get("options") or []:
+            if option.get("name") == name:
+                return str(option.get("value") or "").strip() or None
+        return None
+
+    @staticmethod
+    def _modal_value(interaction: dict[str, Any], custom_id: str) -> str | None:
+        data = interaction.get("data") or {}
+        for row in data.get("components") or []:
+            for component in row.get("components") or []:
+                if component.get("custom_id") == custom_id:
+                    return str(component.get("value") or "").strip() or None
+        return None
 
     @staticmethod
     def _display_name(member: dict[str, Any], user: dict[str, Any], user_id: int) -> str:

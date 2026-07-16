@@ -1,9 +1,11 @@
 """Discord slash-command identity gate tests."""
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from uuid import UUID
 
 from course_platform.discord.application import DiscordApplication
+from course_platform.services.discord_invites import InvalidDiscordAccessCodeError
 from course_platform.services.discord_lesson_deliveries import DiscordLessonDeliveryItem
 from course_platform.services.submissions import SubmissionReceipt
 
@@ -15,9 +17,17 @@ class FakeAPI:
         self.channel_messages: list[tuple[int, dict[str, object]]] = []
         self.deferred_updates: list[tuple[str, str]] = []
         self.edited_messages: list[tuple[int, int, dict[str, object]]] = []
+        self.modals: list[dict[str, object]] = []
 
     async def respond_interaction(self, interaction_id, token, content) -> None:
         self.responses.append(content)
+
+    async def respond_with_modal(
+        self, interaction_id, token, *, custom_id, title, components
+    ) -> None:
+        self.modals.append(
+            {"custom_id": custom_id, "title": title, "components": components}
+        )
 
     async def followup(self, application_id, token, content) -> None:
         self.followups.append(content)
@@ -42,14 +52,20 @@ class FakeAPI:
         return {"id": "300"}
 
 
+STUDENT_ID = UUID("00000000-0000-0000-0000-0000000000aa")
+COURSE_ID = UUID("00000000-0000-0000-0000-0000000000bb")
+
+
 @dataclass
 class FakeParticipantService:
     activities: list[dict[str, object]] = field(default_factory=list)
     departures: list[dict[str, object]] = field(default_factory=list)
+    creations: list[dict[str, object]] = field(default_factory=list)
     activity_result: bool = True
 
     async def get_or_create(self, **kwargs):
-        return object()
+        self.creations.append(kwargs)
+        return SimpleNamespace(student_id=STUDENT_ID)
 
     async def record_activity(self, **kwargs):
         self.activities.append(kwargs)
@@ -58,6 +74,48 @@ class FakeParticipantService:
     async def mark_left(self, **kwargs):
         self.departures.append(kwargs)
         return True
+
+
+class FakeHomeworkService:
+    """Only ``find`` matters here: it decides whether a seat already exists."""
+
+    def __init__(self, existing: object | None = None) -> None:
+        self.existing = existing
+
+    async def find(self, guild_id: int, discord_user_id: int):
+        return self.existing
+
+
+class FakeInviteService:
+    def __init__(self, *, course_id: UUID | None = None, valid: bool = True) -> None:
+        self.course_id = course_id
+        self.valid = valid
+        self.redeemed: list[dict[str, object]] = []
+
+    async def redeem_access_code(self, *, guild_id: int, code: str, discord_user_id: int):
+        if not self.valid:
+            raise InvalidDiscordAccessCodeError("invalid-access-code")
+        self.redeemed.append(
+            {"guild_id": guild_id, "code": code, "discord_user_id": discord_user_id}
+        )
+        return SimpleNamespace(course_id=self.course_id)
+
+
+class FakeHomeworkManager:
+    def __init__(self) -> None:
+        self.created: list[dict[str, object]] = []
+
+    async def get_or_create(self, **kwargs):
+        self.created.append(kwargs)
+        return SimpleNamespace(space=SimpleNamespace(channel_id=300), created=True)
+
+
+class FakeStudentAccessService:
+    def __init__(self) -> None:
+        self.assigned: list[dict[str, object]] = []
+
+    async def assign_discord_course(self, *, student_id: UUID, course_id: UUID) -> None:
+        self.assigned.append({"student_id": student_id, "course_id": course_id})
 
 
 class FakeSubmissionService:
@@ -447,7 +505,7 @@ async def test_setup_welcome_publishes_button_into_welcome_channel() -> None:
     assert channel_id == 777
     button = payload["components"][0]["components"][0]  # type: ignore[index]
     assert button["custom_id"] == "open_homework"
-    assert button["label"] == "Открыть моё пространство"
+    assert button["label"] == "Получить доступ"
 
 
 async def test_setup_welcome_reports_unconfigured_channel() -> None:
@@ -466,34 +524,82 @@ async def test_setup_welcome_reports_unconfigured_channel() -> None:
     assert "DISCORD_INVITE_CHANNEL_ID" in api.followups[0]
 
 
-async def test_welcome_button_click_opens_homework_space() -> None:
+async def test_welcome_button_new_student_opens_code_modal() -> None:
     api = FakeAPI()
-    app = DiscordApplication(
-        api,  # type: ignore[arg-type]
-        "token",
-        100,
-        object(),  # type: ignore[arg-type]
-        FakeParticipantService(),  # type: ignore[arg-type]
-    )
-    opened: list[dict[str, object]] = []
-
-    async def fake_homework(payload: dict[str, object]) -> None:
-        opened.append(payload)
-
-    app._handle_homework = fake_homework  # type: ignore[method-assign]  # noqa: SLF001
-
-    await app._handle_interaction(  # noqa: SLF001
-        {
-            "id": "1",
-            "token": "token",
-            "application_id": "app",
-            "guild_id": "100",
-            "member": {"user": {"id": "200", "username": "alex"}},
-            "data": {"custom_id": "open_homework", "component_type": 2},
-        }
+    participants = FakeParticipantService()
+    invites = FakeInviteService()
+    app = build_homework_app(
+        api, participants=participants, homework_service=FakeHomeworkService(), invites=invites
     )
 
-    assert len(opened) == 1
+    await app._handle_interaction(button_interaction())  # noqa: SLF001
+
+    # New student: the click must pop the code modal — read-only channel, so the
+    # code is typed into the popup — and create nothing until the code is checked.
+    assert len(api.modals) == 1
+    assert api.modals[0]["custom_id"] == "homework_code_modal"
+    field = api.modals[0]["components"][0]["components"][0]  # type: ignore[index]
+    assert field["custom_id"] == "access_code"
+    assert invites.redeemed == []
+    assert app._homework_manager.created == []  # noqa: SLF001
+
+
+async def test_welcome_button_returning_student_reopens_space_without_modal() -> None:
+    api = FakeAPI()
+    participants = FakeParticipantService()
+    invites = FakeInviteService()
+    app = build_homework_app(
+        api,
+        participants=participants,
+        homework_service=FakeHomeworkService(existing=SimpleNamespace(channel_id=300)),
+        invites=invites,
+    )
+
+    await app._handle_interaction(button_interaction())  # noqa: SLF001
+
+    # Already has a seat: reopen straight away, no modal, no code demanded.
+    assert api.modals == []
+    assert invites.redeemed == []
+    assert len(app._homework_manager.created) == 1  # noqa: SLF001
+    assert "<#300>" in api.followups[0]
+
+
+async def test_code_modal_with_valid_code_opens_space_and_assigns_course() -> None:
+    api = FakeAPI()
+    participants = FakeParticipantService()
+    invites = FakeInviteService(course_id=COURSE_ID)
+    access = FakeStudentAccessService()
+    app = build_homework_app(
+        api,
+        participants=participants,
+        homework_service=FakeHomeworkService(),
+        invites=invites,
+        access=access,
+    )
+
+    await app._handle_interaction(modal_interaction("GOOD-CODE-HERE"))  # noqa: SLF001
+
+    assert invites.redeemed == [
+        {"guild_id": 100, "code": "GOOD-CODE-HERE", "discord_user_id": 200}
+    ]
+    assert len(app._homework_manager.created) == 1  # noqa: SLF001
+    assert access.assigned == [{"student_id": STUDENT_ID, "course_id": COURSE_ID}]
+    assert "<#300>" in api.followups[0]
+
+
+async def test_code_modal_with_invalid_code_gets_no_space() -> None:
+    api = FakeAPI()
+    participants = FakeParticipantService()
+    invites = FakeInviteService(valid=False)
+    app = build_homework_app(
+        api, participants=participants, homework_service=FakeHomeworkService(), invites=invites
+    )
+
+    await app._handle_interaction(modal_interaction("WRON-GCOD-EXXX"))  # noqa: SLF001
+
+    assert participants.creations == []
+    assert app._homework_manager.created == []  # noqa: SLF001
+    assert "не подошёл" in api.followups[0]
 
 
 async def test_interaction_from_another_guild_is_ignored() -> None:
@@ -508,10 +614,10 @@ async def test_interaction_from_another_guild_is_ignored() -> None:
     )
     opened: list[dict[str, object]] = []
 
-    async def fake_homework(payload: dict[str, object]) -> None:
+    async def fake_button(payload: dict[str, object]) -> None:
         opened.append(payload)
 
-    app._handle_homework = fake_homework  # type: ignore[method-assign]  # noqa: SLF001
+    app._handle_homework_button = fake_button  # type: ignore[method-assign]  # noqa: SLF001
 
     # Same bot token can be connected to a staging guild; its clicks must not be
     # served against the configured guild.
@@ -521,6 +627,7 @@ async def test_interaction_from_another_guild_is_ignored() -> None:
             "token": "token",
             "application_id": "app",
             "guild_id": "999",
+            "type": 3,
             "member": {"user": {"id": "200", "username": "alex"}},
             "data": {"custom_id": "open_homework", "component_type": 2},
         }
@@ -528,3 +635,132 @@ async def test_interaction_from_another_guild_is_ignored() -> None:
 
     assert opened == []
     assert api.channel_messages == []
+
+
+def homework_interaction(code: str | None = None):
+    options = [{"name": "code", "type": 3, "value": code}] if code is not None else []
+    return interaction("homework", options)
+
+
+def button_interaction():
+    return {
+        "id": "1",
+        "token": "token",
+        "application_id": "app",
+        "guild_id": "100",
+        "type": 3,  # MESSAGE_COMPONENT
+        "member": {"user": {"id": "200", "username": "alex"}},
+        "data": {"custom_id": "open_homework", "component_type": 2},
+    }
+
+
+def modal_interaction(code: str):
+    return {
+        "id": "1",
+        "token": "token",
+        "application_id": "app",
+        "guild_id": "100",
+        "type": 5,  # MODAL_SUBMIT
+        "member": {"user": {"id": "200", "username": "alex"}},
+        "data": {
+            "custom_id": "homework_code_modal",
+            "components": [
+                {
+                    "type": 1,
+                    "components": [
+                        {"type": 4, "custom_id": "access_code", "value": code}
+                    ],
+                }
+            ],
+        },
+    }
+
+
+def build_homework_app(api, *, participants, homework_service, invites, access=None):
+    app = DiscordApplication(
+        api,  # type: ignore[arg-type]
+        "token",
+        100,
+        homework_service,  # type: ignore[arg-type]
+        participants,  # type: ignore[arg-type]
+        invite_service=invites,  # type: ignore[arg-type]
+        student_access_service=access,  # type: ignore[arg-type]
+    )
+    app._homework_manager = FakeHomeworkManager()  # noqa: SLF001
+    return app
+
+
+async def test_new_student_without_access_code_gets_no_space() -> None:
+    api = FakeAPI()
+    participants = FakeParticipantService()
+    invites = FakeInviteService()
+    app = build_homework_app(
+        api, participants=participants, homework_service=FakeHomeworkService(), invites=invites
+    )
+
+    await app._handle_interaction(homework_interaction())  # noqa: SLF001
+
+    # The desk is hidden from @everyone, so a codeless member must get nothing:
+    # no redeem, no student record, no thread.
+    assert invites.redeemed == []
+    assert participants.creations == []
+    assert app._homework_manager.created == []  # noqa: SLF001
+    assert "код доступа" in api.followups[0].lower()
+
+
+async def test_new_student_with_invalid_access_code_gets_no_space() -> None:
+    api = FakeAPI()
+    participants = FakeParticipantService()
+    invites = FakeInviteService(valid=False)
+    app = build_homework_app(
+        api, participants=participants, homework_service=FakeHomeworkService(), invites=invites
+    )
+
+    await app._handle_interaction(homework_interaction("WRON-GCOD-EXXX"))  # noqa: SLF001
+
+    assert participants.creations == []
+    assert app._homework_manager.created == []  # noqa: SLF001
+    assert "не подошёл" in api.followups[0]
+
+
+async def test_valid_access_code_opens_space_and_assigns_course() -> None:
+    api = FakeAPI()
+    participants = FakeParticipantService()
+    invites = FakeInviteService(course_id=COURSE_ID)
+    access = FakeStudentAccessService()
+    app = build_homework_app(
+        api,
+        participants=participants,
+        homework_service=FakeHomeworkService(),
+        invites=invites,
+        access=access,
+    )
+
+    await app._handle_interaction(homework_interaction("GOOD-CODE-HERE"))  # noqa: SLF001
+
+    assert invites.redeemed == [
+        {"guild_id": 100, "code": "GOOD-CODE-HERE", "discord_user_id": 200}
+    ]
+    assert len(app._homework_manager.created) == 1  # noqa: SLF001
+    # The course rides along with the code, so the student lands already enrolled.
+    assert access.assigned == [{"student_id": STUDENT_ID, "course_id": COURSE_ID}]
+    assert "<#300>" in api.followups[0]
+
+
+async def test_returning_student_reopens_space_without_a_code() -> None:
+    api = FakeAPI()
+    participants = FakeParticipantService()
+    invites = FakeInviteService()
+    app = build_homework_app(
+        api,
+        participants=participants,
+        homework_service=FakeHomeworkService(existing=SimpleNamespace(channel_id=300)),
+        invites=invites,
+    )
+
+    await app._handle_interaction(homework_interaction())  # noqa: SLF001
+
+    # Already paid for their seat: no code is demanded a second time.
+    assert invites.redeemed == []
+    assert len(app._homework_manager.created) == 1  # noqa: SLF001
+    assert "<#300>" in api.followups[0]

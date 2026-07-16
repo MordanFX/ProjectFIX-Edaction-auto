@@ -272,6 +272,10 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .discord-invite-list__status { flex: none; color: #6fd08a; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
 .discord-invite-list li.is-expired { opacity: .58; }
 .discord-invite-list li.is-expired .discord-invite-list__status { color: #8a97a6; }
+.discord-invite-list li.is-used .discord-invite-list__status { color: #7fb2ff; }
+.discord-invite-code { grid-column: 1 / -1; display: grid; gap: 4px; padding: 12px 14px; background: #06111d; border: 1px solid #3a6fa0; border-radius: 10px; }
+.discord-invite-code small { color: #8fa6bd; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.discord-invite-code b { color: #eaf4ff; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 22px; letter-spacing: .12em; }
 .discord-workflow { margin-bottom: 20px; overflow: hidden; color: #eaf1fb; background: #0c1827; border: 1px solid #2a4058; border-radius: 16px; }
 .discord-workflow > header { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 20px 22px 17px; background: linear-gradient(135deg, #11263e, #0d1b2c); border-bottom: 1px solid #2a4058; }
 .discord-workflow > header h2 { margin: 4px 0 0; font-size: 20px; }
