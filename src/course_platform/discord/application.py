@@ -48,19 +48,19 @@ ACCESS_CODE_INPUT = "access_code"
 ACCESS_CODE_OPTION = "code"
 HOMEWORK_BUTTON_LABEL = "Получить доступ"
 ACCESS_CODE_REQUIRED = (
-    "Нужен код доступа — его выдаёт куратор вместе со ссылкой на сервер.\n"
-    "Нажми кнопку «Получить доступ» в канале входа и введи код."
+    "Для первого входа нужен код доступа — его выдаёт куратор вместе со ссылкой.\n"
+    "Нажми кнопку «Получить доступ» и введи код из сообщения куратора."
 )
 ACCESS_CODE_INVALID = (
-    "Код не подошёл: он неверный, уже использован или истёк.\n"
-    "Обратись к куратору за новым."
+    "Этот код не подошёл — возможно, он уже использован или истёк.\n"
+    "Напиши куратору, он выдаст новый."
 )
 WELCOME_MESSAGE = (
     "**Добро пожаловать в Project FIX!**\n\n"
     "Куратор выдал тебе персональный код доступа. Нажми кнопку ниже, "
-    "введи код — и бот создаст твоё личное пространство для домашних работ: "
-    "его видишь только ты и кураторы.\n\n"
-    "Уже занимаешься? Нажми ту же кнопку — она откроет твою ветку."
+    "введи код — и я открою твоё личное пространство для домашних работ. "
+    "Его видишь только ты и кураторы.\n\n"
+    "Уже занимаешься? Жми ту же кнопку — открою твою ветку."
 )
 
 
@@ -224,9 +224,9 @@ class DiscordApplication:
             if self._feedback_service is not None:
                 for item in await self._feedback_service.list_pending():
                     verdict = (
-                        "✅ Домашняя работа принята"
+                        "✅ Принято! Отличная работа"
                         if item.verdict.value == "accepted"
-                        else "🔄 Домашняя работа отправлена на доработку"
+                        else "🔄 Нужно доработать — смотри комментарий ниже"
                     )
                     try:
                         local_attachments = [
@@ -378,7 +378,7 @@ class DiscordApplication:
         await self._api.send_channel_message(
             channel_id,
             {
-                "content": "Что сделать с этим сообщением?",
+                "content": "Отправить эту работу на проверку?",
                 "message_reference": {
                     "message_id": str(message["id"]),
                     "channel_id": str(channel_id),
@@ -498,21 +498,22 @@ class DiscordApplication:
                 attachments=attachments,
             )
             content = (
-                f"✅ ДЗ отправлено: урок {receipt.lesson_position} · "
-                f"{receipt.lesson_title}, попытка {receipt.attempt_number}."
+                f"✅ Работа ушла на проверку: урок {receipt.lesson_position} · "
+                f"{receipt.lesson_title}, попытка {receipt.attempt_number}. "
+                "Как куратор посмотрит — напишу сюда."
             )
         except DiscordMessageAlreadySubmittedError:
-            content = "Это сообщение уже отправлено на проверку."
+            content = "Эта работа уже на проверке."
         except SubmissionPendingError:
-            content = "Предыдущая работа ещё ожидает проверки куратора."
+            content = "Твоя предыдущая работа ещё на проверке — сначала дождись ответа."
         except AssignmentAcceptedError:
-            content = "Текущее домашнее задание уже принято."
+            content = "Это задание уже принято — ждём следующий урок."
         except UnsupportedSubmissionKindError:
-            content = "Формат сообщения не подходит для текущего задания."
+            content = "Для этого задания нужен другой формат — глянь условие ещё раз."
         except (NoActiveAssignmentError, DiscordSubmissionAccessError):
-            content = "Нет активного задания или это не твоя приватная ветка."
+            content = "Не нашёл активного задания — или это не твоя ветка."
         except EmptySubmissionError:
-            content = "В сообщении нет текста или файлов для отправки."
+            content = "В сообщении пусто — добавь текст или файл и попробуй снова."
         if prompt_message.get("id"):
             await self._api.edit_channel_message(
                 channel_id,
@@ -552,9 +553,9 @@ class DiscordApplication:
                 channel_id=channel_id,
                 message_id=message_id,
             )
-            content = "Вопрос передан команде. Ответ появится здесь, в этой ветке."
+            content = "Передал вопрос куратору — ответ придёт сюда, в твою ветку."
         except DiscordQuestionAccessError:
-            content = "Не удалось передать вопрос. Проверь, что это твоя приватная ветка."
+            content = "Не получилось передать вопрос — похоже, это не твоя ветка."
         if prompt_message.get("id"):
             await self._api.edit_channel_message(
                 channel_id,
@@ -667,7 +668,7 @@ class DiscordApplication:
         await self._api.respond_interaction(
             interaction_id,
             interaction_token,
-            "Открываю личное пространство…",
+            "Секунду, открываю твоё пространство…",
         )
         await self._provision_homework(
             interaction,
@@ -691,7 +692,7 @@ class DiscordApplication:
             await self._api.respond_interaction(
                 interaction_id,
                 interaction_token,
-                "Открываю личное пространство…",
+                "Секунду, открываю твоё пространство…",
             )
             await self._provision_homework(
                 interaction,
@@ -731,7 +732,7 @@ class DiscordApplication:
         await self._api.respond_interaction(
             interaction_id,
             interaction_token,
-            "Проверяю код доступа…",
+            "Секунду, проверяю код…",
         )
         await self._provision_homework(
             interaction,
@@ -811,7 +812,6 @@ class DiscordApplication:
                     )
                 except StudentAccessError:
                     logger.exception("Discord access code course assignment failed")
-            action = "создано" if result.created else "уже было создано"
             assignment = (
                 await self._submission_service.current_assignment(
                     guild_id=self._guild_id,
@@ -821,11 +821,19 @@ class DiscordApplication:
                 else None
             )
             content = (
-                f"Личное пространство {action}: <#{result.space.channel_id}>. "
-                "Открой его и отправляй домашние работы туда."
+                f"Готово! Твоё личное пространство: <#{result.space.channel_id}>. "
+                "Здесь будем разбирать твои работы — видишь его только ты и кураторы."
+                if result.created
+                else (
+                    f"С возвращением! Твоё пространство: <#{result.space.channel_id}> "
+                    "— заходи, продолжаем."
+                )
             )
             if assignment is None:
-                content += "\n\nСейчас активного домашнего задания нет."
+                content += (
+                    "\n\nАктивного задания сейчас нет — "
+                    "как появится, оно придёт прямо в твою ветку."
+                )
             else:
                 instructions = assignment.instructions.strip()
                 if len(instructions) > 1200:
@@ -848,8 +856,8 @@ class DiscordApplication:
                 except Exception:
                     logger.exception("Discord access code release failed")
             content = (
-                "Не удалось открыть личное пространство. "
-                "Проверь права приложения или обратись к куратору."
+                "Не удалось открыть пространство — что-то пошло не так. "
+                "Напиши куратору, разберёмся."
             )
         await self._api.followup(application_id, interaction_token, content)
 

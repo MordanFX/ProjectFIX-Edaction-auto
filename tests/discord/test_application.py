@@ -283,7 +283,10 @@ async def test_submission_confirmation_edits_prompt_without_duplicate_messages()
             300,
             700,
             {
-                "content": "✅ ДЗ отправлено: урок 1 · First lesson, попытка 1.",
+                "content": (
+                    "✅ Работа ушла на проверку: урок 1 · First lesson, "
+                    "попытка 1. Как куратор посмотрит — напишу сюда."
+                ),
                 "components": [],
             },
         )
@@ -331,7 +334,7 @@ async def test_question_confirmation_creates_curator_question() -> None:
             300,
             700,
             {
-                "content": "Вопрос передан команде. Ответ появится здесь, в этой ветке.",
+                "content": "Передал вопрос куратору — ответ придёт сюда, в твою ветку.",
                 "components": [],
             },
         )
