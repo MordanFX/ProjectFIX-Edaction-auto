@@ -2916,8 +2916,8 @@ input[type="checkbox"] { accent-color: var(--fix-blue); }
 .fix-workspace { min-width: 0; min-height: 100vh; }
 .fix-workspace__bar { height: 58px; display: flex; align-items: center; justify-content: space-between; padding: 0 clamp(28px, 4vw, 64px); background: rgb(10 10 11 / 62%); border-bottom: 1px solid rgb(42 42 46 / 75%); }
 .fix-workspace__bar > span { color: var(--fix-muted); font-size: 8px; font-weight: 600; letter-spacing: .18em; }
-.fix-sync { min-height: 30px; padding: 0 11px; color: var(--fix-silver); background: transparent; border: 1px solid #303035; border-radius: 6px; font-size: 8px; font-weight: 600; letter-spacing: .05em; }
-.fix-sync:hover { color: var(--fix-white); background: var(--fix-surface); }
+.fix-logout { min-height: 30px; padding: 0 11px; color: var(--fix-silver); background: transparent; border: 1px solid #303035; border-radius: 6px; font-size: 8px; font-weight: 600; letter-spacing: .05em; }
+.fix-logout:hover { color: var(--fix-white); background: var(--fix-surface); border-color: #4a3035; }
 .fix-workspace .dashboard-content { width: min(1280px, calc(100% - 72px)); margin: 0 auto; padding: 64px 0 96px; }
 
 @media (max-width: 880px) {

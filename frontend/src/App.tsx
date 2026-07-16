@@ -267,7 +267,7 @@ export function App() {
       <div className="fix-workspace">
         <header className="fix-workspace__bar">
           <span>PROJECT FIX / {section.toUpperCase()}</span>
-          <button className="fix-sync" onClick={handleRefresh}>Синхронизировать</button>
+          <button className="fix-logout" onClick={handleLogout}>Выйти ↗</button>
         </header>
         <section className="dashboard-content">
           {error && <div className="page-error">{error}</div>}
