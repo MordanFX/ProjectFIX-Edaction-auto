@@ -137,6 +137,7 @@ class StudentBotState(TimestampMixin, Base):
             name="conversation_state",
             native_enum=False,
             values_callable=enum_values,
+            length=32,
         ),
         default=ConversationState.IDLE,
     )
