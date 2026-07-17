@@ -583,10 +583,13 @@ class MessageRouter:
 
         await self._api.answer_callback_query(callback.id, text="Урок отмечен")
         if callback.message is not None:
+            refreshed = await self._learning.get_available_lesson(
+                callback.sender.id, lesson_id
+            )
             await self._api.edit_message_reply_markup(
                 callback.message.chat.id,
                 callback.message.message_id,
-                {"inline_keyboard": []},
+                self._completed_lesson_reply_markup(refreshed or lesson),
             )
             await self._api.send_message(
                 callback.message.chat.id,
@@ -2114,6 +2117,44 @@ class MessageRouter:
         return {
             "inline_keyboard": rows
         }
+
+    @staticmethod
+    def _completed_lesson_reply_markup(lesson: CurrentLesson) -> dict[str, object]:
+        """Keep rewatch and homework entry points once the view is confirmed."""
+        rows: list[list[dict[str, object]]] = []
+        if lesson.video_source.value == "external_url" and lesson.video_reference:
+            rows.append(
+                [
+                    {
+                        "text": "▶ Смотреть урок повторно",
+                        "url": vimeo_watch_url(lesson.video_reference),
+                    }
+                ]
+            )
+        for material in lesson.materials:
+            rows.append(
+                [
+                    {
+                        "text": (
+                            f"{'🖼' if material.kind == 'image' else '▶️'} "
+                            f"{material.position}. {material.title}"
+                        )[:64],
+                        "callback_data": (
+                            f"material:{lesson.lesson_id}:{material.position}"
+                        ),
+                    }
+                ]
+            )
+        if lesson.assignment_instructions:
+            rows.append(
+                [
+                    {
+                        "text": "📝 Домашнее задание",
+                        "callback_data": f"homework:{lesson.lesson_id}",
+                    }
+                ]
+            )
+        return {"inline_keyboard": rows}
 
     @staticmethod
     def _replay_lesson_reply_markup(lesson: CurrentLesson) -> dict[str, object]:

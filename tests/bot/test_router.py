@@ -556,7 +556,17 @@ async def test_viewed_callback_updates_lesson_and_unlocks_homework(
         await router.handle(message_update("📤 Сдать ДЗ"))
 
     assert any(method == "answerCallbackQuery" for method, _ in api_calls)
-    assert any(method == "editMessageReplyMarkup" for method, _ in api_calls)
+    edited_markup = next(
+        payload
+        for method, payload in api_calls
+        if method == "editMessageReplyMarkup"
+    )
+    edited_labels = {
+        button["text"]
+        for row in edited_markup["reply_markup"]["inline_keyboard"]
+        for button in row
+    }
+    assert "📝 Домашнее задание" in edited_labels
     assert any(
         method == "sendMessage" and "МАТЕРИАЛЫ ОТМЕЧЕНЫ" in str(payload["text"])
         for method, payload in api_calls
@@ -946,23 +956,26 @@ async def test_external_vimeo_lesson_links_use_player_urls(
         lesson.video_reference = "https://vimeo.com/1196958528?share=copy&fl=sv&fe=ci"
         await session.commit()
 
-    sent_messages: list[dict[str, object]] = []
+    api_calls: list[tuple[str, dict[str, object]]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", maxsplit=1)[-1]
         payload = json.loads(request.content)
-        sent_messages.append(payload)
-        return httpx.Response(
-            200,
-            json={
-                "ok": True,
-                "result": {
-                    "message_id": 3,
-                    "date": 1_700_000_001,
-                    "chat": {"id": 555, "type": "private"},
-                    "text": payload.get("text", ""),
+        api_calls.append((method, payload))
+        if method == "sendMessage":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "message_id": len(api_calls),
+                        "date": 1_700_000_001,
+                        "chat": {"id": 555, "type": "private"},
+                        "text": payload["text"],
+                    },
                 },
-            },
-        )
+            )
+        return httpx.Response(200, json={"ok": True, "result": True})
 
     async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
         router = MessageRouter(
@@ -975,8 +988,18 @@ async def test_external_vimeo_lesson_links_use_player_urls(
             AdminDashboardService(session_factory),
         )
         await router.handle(message_update("/lesson"))
+        lesson_message = next(
+            payload for method, payload in api_calls if method == "sendMessage"
+        )
+        viewed_callback = next(
+            button["callback_data"]
+            for row in lesson_message["reply_markup"]["inline_keyboard"]
+            for button in row
+            if "callback_data" in button
+        )
+        await router.handle(review_callback_update(viewed_callback))
 
-    payload = sent_messages[0]
+    payload = lesson_message
     assert 'href="https://player.vimeo.com/video/1196958528"' in str(payload["text"])
     assert "vimeo.com/1196958528?share=copy" not in str(payload["text"])
     url_buttons = [
@@ -990,6 +1013,22 @@ async def test_external_vimeo_lesson_links_use_player_urls(
         payload["link_preview_options"]["url"]
         == "https://player.vimeo.com/video/1196958528"
     )
+
+    # После подтверждения просмотра карточка сохраняет кнопку пересмотра.
+    edited_markup = next(
+        payload
+        for method, payload in api_calls
+        if method == "editMessageReplyMarkup"
+    )
+    edited_buttons = [
+        button
+        for row in edited_markup["reply_markup"]["inline_keyboard"]
+        for button in row
+    ]
+    assert {
+        "text": "▶ Смотреть урок повторно",
+        "url": "https://player.vimeo.com/video/1196958528",
+    } in edited_buttons
 
 
 async def test_lesson_command_reports_completed_lesson_waiting_for_next(
