@@ -181,8 +181,18 @@ http://167.233.113.236:8081
 Последний известный deployed commit:
 
 ```text
-9c45a58 Stop the bot from stripping its own desk permissions on every run
+7a67979 Send Vimeo links through the player and report completed lessons honestly
 ```
+
+Важно про Vimeo (2026-07-18): все учебные видео в Vimeo-аккаунте «Project» стоят в
+режиме «Hide from Vimeo» — страница `vimeo.com/ID` отдаёт 404 всем, кроме владельца,
+работает только встраивание. Поэтому бот и Discord-доставка переписывают ссылки в
+`player.vimeo.com/video/ID` (`vimeo_watch_url` в `integrations/vimeo.py`). Если владелец
+переключит видео на «Unlisted», ссылки в базе нужно заменить на полные с хэшем —
+`vimeo_watch_url` пронесёт хэш как `?h=`.
+
+Деплой-нюанс: после пересоздания контейнера `api` nginx во `frontend` держит старый
+IP upstream и панель отдаёт 502 — нужен `docker compose restart frontend`.
 
 Прод-`.env` на сервере: `DISCORD_INVITE_CHANNEL_ID=1527072325479174184`
 (`#start-for-homework`, вход с кнопкой), `DISCORD_HOMEWORK_CHANNEL_ID=1526145379987623956`
