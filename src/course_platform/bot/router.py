@@ -629,7 +629,12 @@ class MessageRouter:
         if not lesson.is_current:
             hint = "Это задание уже пройденного урока — оно доступно для повторения."
         elif lesson.requires_view_confirmation and lesson.viewed_at is None:
-            hint = "Сначала посмотри материал и отметь урок просмотренным."
+            hint = (
+                "Сдача откроется после того, как отметишь все материалы и нажмёшь "
+                "«✅ Я посмотрел все материалы»."
+                if lesson.materials
+                else "Сначала посмотри материал и отметь урок просмотренным."
+            )
         else:
             hint = "Когда ответ будет готов, нажми «📤 Сдать ДЗ»."
         return f"📝 <b>ДОМАШНЕЕ ЗАДАНИЕ</b>\n\n{instructions}\n\n<i>{hint}</i>"
@@ -1656,13 +1661,21 @@ class MessageRouter:
         material_summary = f"🎬 видео: {video_count}"
         if image_count:
             material_summary += f" · 🖼 изображения: {image_count}"
-        homework_text = (
-            "📝 <b>Домашнее задание:</b> есть\n"
-            "Откроется после просмотра всех материалов урока."
-            if lesson.assignment_instructions
-            else "📝 <b>Домашнее задание:</b> нет\n"
-            "Сдавать ничего не нужно. Достаточно посмотреть материалы урока."
-        )
+        if lesson.assignment_instructions is None:
+            homework_text = (
+                "📝 <b>Домашнее задание:</b> нет\n"
+                "Сдавать ничего не нужно. Достаточно посмотреть материалы урока."
+            )
+        elif lesson.viewed_at is None:
+            homework_text = (
+                "📝 <b>Домашнее задание:</b> есть\n"
+                "Прочитать его можно сразу, а сдать — после отметки всех материалов."
+            )
+        else:
+            homework_text = (
+                "📝 <b>Домашнее задание:</b> есть\n"
+                "Материалы просмотрены — можно сдавать ответ."
+            )
         description = escape(lesson.description or "Описание урока скоро появится.")
         if lesson.viewed_at is None:
             if viewed_count < material_count:
