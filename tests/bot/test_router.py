@@ -21,7 +21,12 @@ from course_platform.models import (
     Submission,
     SubmissionAttachment,
 )
-from course_platform.models.enums import AttachmentKind, SubmissionStatus, VideoSource
+from course_platform.models.enums import (
+    AttachmentKind,
+    FeedbackVerdict,
+    SubmissionStatus,
+    VideoSource,
+)
 from course_platform.services.admin_dashboard import AdminDashboardService
 from course_platform.services.learning import LearningService
 from course_platform.services.notifications import FeedbackNotificationService
@@ -926,3 +931,125 @@ def test_help_and_next_step_placeholders_are_clear() -> None:
     assert MessageRouter._extract_command("🎓 Режим ученика") == "/student_mode"
     assert MessageRouter._extract_command("📚 О курсе") == "/course"
     assert MessageRouter._extract_command("📖 Все уроки") == "/lessons"
+
+
+async def test_external_vimeo_lesson_links_use_player_urls(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).order_by(Lesson.position))
+        assert lesson is not None
+        lesson.video_source = VideoSource.EXTERNAL_URL
+        lesson.video_reference = "https://vimeo.com/1196958528?share=copy&fl=sv&fe=ci"
+        await session.commit()
+
+    sent_messages: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        sent_messages.append(payload)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": 3,
+                    "date": 1_700_000_001,
+                    "chat": {"id": 555, "type": "private"},
+                    "text": payload.get("text", ""),
+                },
+            },
+        )
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            SubmissionService(session_factory),
+            ReviewService(session_factory),
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+        )
+        await router.handle(message_update("/lesson"))
+
+    payload = sent_messages[0]
+    assert 'href="https://player.vimeo.com/video/1196958528"' in str(payload["text"])
+    assert "vimeo.com/1196958528?share=copy" not in str(payload["text"])
+    url_buttons = [
+        button["url"]
+        for row in payload["reply_markup"]["inline_keyboard"]
+        for button in row
+        if "url" in button
+    ]
+    assert url_buttons == ["https://player.vimeo.com/video/1196958528"]
+    assert (
+        payload["link_preview_options"]["url"]
+        == "https://player.vimeo.com/video/1196958528"
+    )
+
+
+async def test_lesson_command_reports_completed_lesson_waiting_for_next(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+
+    progression = ProgressionService(session_factory)
+    submissions = SubmissionService(session_factory)
+    reviews = ReviewService(session_factory)
+    await progression.mark_current_viewed(555)
+    await submissions.begin(555)
+    await submissions.submit_text(555, "Ответ на первый урок")
+    async with session_factory() as session:
+        submission_id = await session.scalar(select(Submission.id).limit(1))
+    assert submission_id is not None
+    await reviews.review(
+        submission_id=submission_id,
+        reviewer_telegram_user_id=555,
+        verdict=FeedbackVerdict.ACCEPTED,
+        message="Принято",
+    )
+    async with session_factory() as session:
+        enrollment = await session.scalar(select(Enrollment))
+        assert enrollment is not None
+        enrollment.current_lesson_position = 1
+        await session.commit()
+
+    sent_messages: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        sent_messages.append(payload)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": 3,
+                    "date": 1_700_000_001,
+                    "chat": {"id": 555, "type": "private"},
+                    "text": payload.get("text", ""),
+                },
+            },
+        )
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            SubmissionService(session_factory),
+            ReviewService(session_factory),
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+        )
+        await router.handle(message_update("/lesson"))
+
+    text = str(sent_messages[0]["text"])
+    assert "Текущий урок пройден" in text
+    assert "зарегистрируйся" not in text

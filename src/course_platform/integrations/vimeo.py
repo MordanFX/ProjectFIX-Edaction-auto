@@ -1,8 +1,28 @@
 """Small asynchronous Vimeo oEmbed metadata client."""
 
+import re
 from dataclasses import dataclass
 
 import httpx
+
+_WATCH_URL = re.compile(
+    r"^https?://(?:www\.)?vimeo\.com/(\d+)(?:/([0-9a-fA-F]+))?/?(?:[?#].*)?$"
+)
+
+
+def vimeo_watch_url(video_reference: str) -> str:
+    """Return a link that plays even for embed-only («Hide from Vimeo») videos.
+
+    The vimeo.com page of such videos answers 404 to everyone but the account
+    owner, while the player page stays reachable, so students get the player.
+    """
+    match = _WATCH_URL.match(video_reference.strip())
+    if match is None:
+        return video_reference
+    video_id, unlisted_hash = match.groups()
+    if unlisted_hash:
+        return f"https://player.vimeo.com/video/{video_id}?h={unlisted_hash}"
+    return f"https://player.vimeo.com/video/{video_id}"
 
 
 @dataclass(frozen=True, slots=True)

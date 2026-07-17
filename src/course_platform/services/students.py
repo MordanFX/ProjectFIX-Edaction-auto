@@ -329,7 +329,9 @@ class StudentService:
             elif enrollment.status is EnrollmentStatus.COMPLETED:
                 stage = StudentStage.COURSE_COMPLETED
             elif lesson is None or (
-                progress is not None and progress.status is LessonProgressStatus.LOCKED
+                progress is not None
+                and progress.status
+                in {LessonProgressStatus.LOCKED, LessonProgressStatus.COMPLETED}
             ):
                 stage = StudentStage.LESSON_LOCKED
             else:

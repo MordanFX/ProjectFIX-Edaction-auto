@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_platform.db.session import session_scope
+from course_platform.integrations.vimeo import vimeo_watch_url
 from course_platform.models import (
     Assignment,
     Cohort,
@@ -336,7 +337,9 @@ class DiscordLessonDeliveryService:
         if lesson.video_source is VideoSource.EXTERNAL_URL and lesson.video_reference:
             # A masked link reads as an action, not as a raw URL dump; bots may
             # use masked links in plain message content.
-            parts.append(f"🎬 **[Смотреть материал →]({lesson.video_reference.strip()})**")
+            parts.append(
+                f"🎬 **[Смотреть материал →]({vimeo_watch_url(lesson.video_reference)})**"
+            )
         if custom_message:
             parts.append(f"**💬 Комментарий куратора**\n{_quote(custom_message)}")
         submission_guide = (

@@ -76,3 +76,43 @@ async def test_complete_course_journey_keeps_feedback_stages_correct(
     delayed_notifications = await FeedbackNotificationService(session_factory).list_pending()
     assert len(delayed_notifications) == 3
     assert [item.course_completed for item in delayed_notifications] == [False, False, True]
+
+
+async def test_completed_lesson_without_advance_reads_as_locked_stage(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    telegram_user_id = 901
+    students = StudentService(session_factory)
+    await students.register(
+        StudentRegistration(telegram_user_id=telegram_user_id, first_name="Blocked")
+    )
+    await seed_demo_data(session_factory)
+
+    progression = ProgressionService(session_factory)
+    submissions = SubmissionService(session_factory)
+    reviews = ReviewService(session_factory)
+
+    await progression.mark_current_viewed(telegram_user_id)
+    await submissions.begin(telegram_user_id)
+    await submissions.submit_text(telegram_user_id, "Ответ на первый урок")
+    async with session_factory() as session:
+        submission_id = await session.scalar(select(Submission.id).limit(1))
+    assert submission_id is not None
+    await reviews.review(
+        submission_id=submission_id,
+        reviewer_telegram_user_id=telegram_user_id,
+        verdict=FeedbackVerdict.ACCEPTED,
+        message="Принято",
+    )
+
+    # The next lesson is not released yet: the enrollment stays on the
+    # completed lesson instead of advancing to an open one.
+    async with session_factory() as session:
+        enrollment = await session.scalar(select(Enrollment))
+        assert enrollment is not None
+        enrollment.current_lesson_position = 1
+        await session.commit()
+
+    journey = await students.get_journey(telegram_user_id)
+    assert journey is not None
+    assert journey.stage is StudentStage.LESSON_LOCKED

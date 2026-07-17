@@ -12,7 +12,7 @@ from course_platform.bot.types import (
     TelegramUser,
 )
 from course_platform.bot.ui import curator_keyboard, main_keyboard
-from course_platform.integrations.vimeo import VimeoOEmbedClient
+from course_platform.integrations.vimeo import VimeoOEmbedClient, vimeo_watch_url
 from course_platform.models.enums import (
     AttachmentKind,
     FeedbackVerdict,
@@ -192,11 +192,16 @@ class MessageRouter:
             response = self._progress_text(progress)
         elif command == "/lesson":
             lesson = await self._learning.get_current_lesson(message.sender.id)
-            response = self._lesson_text(lesson)
+            if lesson is None:
+                response = self._lesson_unavailable_text(
+                    await self._students.get_journey(message.sender.id)
+                )
+            else:
+                response = self._lesson_text(lesson)
             if lesson is not None:
                 if lesson.video_source.value == "external_url" and lesson.video_reference:
                     link_preview_options = {
-                        "url": lesson.video_reference,
+                        "url": vimeo_watch_url(lesson.video_reference),
                         "prefer_large_media": True,
                         "show_above_text": True,
                     }
@@ -501,7 +506,7 @@ class MessageRouter:
                 link_preview_options = None
                 if lesson.video_source.value == "external_url" and lesson.video_reference:
                     link_preview_options = {
-                        "url": lesson.video_reference,
+                        "url": vimeo_watch_url(lesson.video_reference),
                         "prefer_large_media": True,
                         "show_above_text": True,
                     }
@@ -1562,6 +1567,34 @@ class MessageRouter:
         rows.append([{"text": "← Назад", "callback_data": "settings:menu"}])
         return {"inline_keyboard": rows}
 
+    @classmethod
+    def _lesson_unavailable_text(cls, journey: StudentJourney | None) -> str:
+        if journey is None or journey.stage is StudentStage.NO_COURSE:
+            return (
+                "🔒 <b>Урок пока недоступен</b>\n\n"
+                "Сначала зарегистрируйся через /start или дождись назначения курса."
+            )
+        if journey.stage is StudentStage.COURSE_COMPLETED:
+            return (
+                "🏆 <b>Курс завершён</b>\n\n"
+                "Все обязательные уроки пройдены. Пересмотреть материалы можно "
+                "через «📚 Программа курса»."
+            )
+        if journey.stage is StudentStage.LESSON_LOCKED:
+            lesson_line = (
+                f"📘 Урок {journey.lesson_position}: "
+                f"<b>{escape(journey.lesson_title)}</b> — пройден.\n\n"
+                if journey.lesson_position is not None and journey.lesson_title
+                else ""
+            )
+            return (
+                "✅ <b>Текущий урок пройден</b>\n\n"
+                f"{lesson_line}"
+                "Следующий урок откроется по расписанию — бот пришлёт уведомление. "
+                "Пройденные уроки доступны в «📚 Программа курса»."
+            )
+        return f"🔒 <b>Урок сейчас недоступен</b>\n\n{cls._journey_hint(journey)}"
+
     @staticmethod
     def _lesson_text(lesson: CurrentLesson | None) -> str:
         if lesson is None:
@@ -1571,7 +1604,7 @@ class MessageRouter:
             )
 
         if lesson.video_source.value == "external_url" and lesson.video_reference:
-            video_url = escape(lesson.video_reference, quote=True)
+            video_url = escape(vimeo_watch_url(lesson.video_reference), quote=True)
             video_text = f'🎬 <b>Видео</b>\n<a href="{video_url}">Открыть урок</a>'
         elif lesson.video_source.value == "telegram_channel":
             video_text = "🎬 <b>Видео</b>\nМатериал подготовлен в Telegram."
@@ -1754,7 +1787,9 @@ class MessageRouter:
         )
         rows: list[list[dict[str, object]]] = []
         if material.kind == "video" and material.video_reference:
-            rows.append([{"text": "▶ Смотреть видео", "url": material.video_reference}])
+            rows.append(
+                [{"text": "▶ Смотреть видео", "url": vimeo_watch_url(material.video_reference)}]
+            )
         if not material.is_viewed:
             rows.append(
                 [
@@ -2064,7 +2099,7 @@ class MessageRouter:
                 [
                     {
                         "text": "▶ Смотреть урок",
-                        "url": lesson.video_reference,
+                        "url": vimeo_watch_url(lesson.video_reference),
                     }
                 ]
             )
@@ -2084,7 +2119,14 @@ class MessageRouter:
     def _replay_lesson_reply_markup(lesson: CurrentLesson) -> dict[str, object]:
         rows: list[list[dict[str, object]]] = []
         if lesson.video_source.value == "external_url" and lesson.video_reference:
-            rows.append([{"text": "▶ Смотреть урок повторно", "url": lesson.video_reference}])
+            rows.append(
+                [
+                    {
+                        "text": "▶ Смотреть урок повторно",
+                        "url": vimeo_watch_url(lesson.video_reference),
+                    }
+                ]
+            )
         return {"inline_keyboard": rows}
 
     @staticmethod
