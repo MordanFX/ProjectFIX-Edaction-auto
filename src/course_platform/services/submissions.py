@@ -69,6 +69,10 @@ class NotAwaitingQuestionError(SubmissionWorkflowError):
     pass
 
 
+class NoPendingSubmissionError(SubmissionWorkflowError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class SubmissionPrompt:
     lesson_position: int
@@ -82,6 +86,14 @@ class SubmissionReceipt:
     lesson_position: int
     lesson_title: str
     attempt_number: int
+
+
+@dataclass(frozen=True, slots=True)
+class AttachmentAppendReceipt:
+    lesson_position: int
+    lesson_title: str
+    attempt_number: int
+    attachment_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,6 +445,68 @@ class SubmissionService:
             self._clear_waiting_state(row)
 
             return self._receipt(row, attempt_number)
+
+    async def append_attachment(
+        self,
+        telegram_user_id: int,
+        attachment: HomeworkAttachment,
+        *,
+        caption: str | None = None,
+    ) -> AttachmentAppendReceipt:
+        """Attach a late file (album tail, extra photo) to the freshly sent work."""
+        async with session_scope(self._session_factory) as session:
+            row = (
+                await session.execute(
+                    select(Submission, Lesson.position, Lesson.title)
+                    .join(Enrollment, Enrollment.id == Submission.enrollment_id)
+                    .join(Student, Student.id == Enrollment.student_id)
+                    .join(Assignment, Assignment.id == Submission.assignment_id)
+                    .join(Lesson, Lesson.id == Assignment.lesson_id)
+                    .where(
+                        Student.telegram_user_id == telegram_user_id,
+                        Submission.status == SubmissionStatus.SUBMITTED,
+                    )
+                    .order_by(Submission.submitted_at.desc())
+                    .limit(1)
+                )
+            ).one_or_none()
+            if row is None:
+                raise NoPendingSubmissionError
+
+            submission = row.Submission
+            previous_count = (
+                await session.scalar(
+                    select(func.count(SubmissionAttachment.id)).where(
+                        SubmissionAttachment.submission_id == submission.id
+                    )
+                )
+                or 0
+            )
+            session.add(
+                SubmissionAttachment(
+                    submission_id=submission.id,
+                    kind=attachment.kind,
+                    telegram_file_id=attachment.telegram_file_id,
+                    telegram_file_unique_id=attachment.telegram_file_unique_id,
+                    file_name=attachment.file_name,
+                    mime_type=attachment.mime_type,
+                    file_size=attachment.file_size,
+                    source_chat_id=attachment.source_chat_id,
+                    source_message_id=attachment.source_message_id,
+                    duration_seconds=attachment.duration_seconds,
+                    width=attachment.width,
+                    height=attachment.height,
+                )
+            )
+            normalized_caption = caption.strip() if caption and caption.strip() else None
+            if normalized_caption and not submission.text_body:
+                submission.text_body = normalized_caption
+            return AttachmentAppendReceipt(
+                lesson_position=row.position,
+                lesson_title=row.title,
+                attempt_number=submission.attempt_number,
+                attachment_count=previous_count + 1,
+            )
 
     async def cancel(self, telegram_user_id: int) -> bool:
         async with session_scope(self._session_factory) as session:

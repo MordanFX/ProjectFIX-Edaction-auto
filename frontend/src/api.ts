@@ -386,13 +386,15 @@ export function decideReview(
   submissionId: string,
   verdict: ReviewVerdict,
   message: string,
-  attachment?: File | null,
+  attachments?: File[] | null,
 ): Promise<ReviewDecision> {
-  if (attachment) {
+  if (attachments && attachments.length > 0) {
     const form = new FormData();
     form.set("verdict", verdict);
     form.set("message", message);
-    form.set("attachment", attachment);
+    for (const attachment of attachments) {
+      form.append("attachments", attachment);
+    }
     return request<ReviewDecision>(`/api/reviews/${submissionId}/decision-with-attachment`, {
       method: "POST",
       body: form,

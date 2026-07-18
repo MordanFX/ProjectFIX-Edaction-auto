@@ -1187,3 +1187,61 @@ async def test_marking_last_material_finishes_lesson_without_extra_button(
     }
     assert "✅ Я посмотрел все материалы" not in final_labels
     assert "📝 Домашнее задание" in final_labels
+
+
+async def test_album_second_photo_joins_submitted_homework(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+    await ProgressionService(session_factory).mark_current_viewed(555)
+
+    api_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", maxsplit=1)[-1]
+        payload = json.loads(request.content)
+        api_calls.append((method, payload))
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": len(api_calls),
+                    "date": 1_700_000_003,
+                    "chat": {"id": 555, "type": "private"},
+                    "text": payload.get("text", ""),
+                },
+            },
+        )
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            SubmissionService(session_factory),
+            ReviewService(session_factory),
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+        )
+        await router.handle(message_update("📤 Сдать ДЗ"))
+        await router.handle(photo_update())
+        await router.handle(photo_update())
+
+    async with session_factory() as session:
+        attachments = (await session.scalars(select(SubmissionAttachment))).all()
+        submissions_count = len((await session.scalars(select(Submission))).all())
+
+    assert submissions_count == 1
+    assert len(attachments) == 2
+    assert any(
+        method == "sendMessage"
+        and "Файл добавлен к отправленной работе" in str(payload.get("text"))
+        for method, payload in api_calls
+    )
+    assert not any(
+        method == "sendMessage" and "Не понял сообщение" in str(payload.get("text"))
+        for method, payload in api_calls
+    )

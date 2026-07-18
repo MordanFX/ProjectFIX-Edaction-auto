@@ -662,7 +662,10 @@ async def test_review_decision_can_upload_curator_attachment(
             f"/api/reviews/{submission_id}/decision-with-attachment",
             headers={"Authorization": f"Bearer {token}"},
             data={"verdict": "revision_requested", "message": ""},
-            files={"attachment": ("markup.png", b"fake-image", "image/png")},
+            files=[
+                ("attachments", ("markup.png", b"fake-image", "image/png")),
+                ("attachments", ("plan.pdf", b"fake-pdf", "application/pdf")),
+            ],
         )
         detail = await client.get(
             f"/api/reviews/{submission_id}",
@@ -670,17 +673,26 @@ async def test_review_decision_can_upload_curator_attachment(
         )
 
     async with session_factory() as session:
-        feedback_attachment = await session.scalar(select(FeedbackAttachment))
+        feedback_attachments = (
+            await session.scalars(
+                select(FeedbackAttachment).order_by(FeedbackAttachment.created_at)
+            )
+        ).all()
 
     assert decision.status_code == 200
     assert decision.json()["verdict"] == "revision_requested"
-    assert feedback_attachment is not None
-    assert feedback_attachment.file_name == "markup.png"
-    assert feedback_attachment.local_path is not None
-    assert await to_thread(Path(feedback_attachment.local_path).is_file)
+    assert [item.file_name for item in feedback_attachments] == [
+        "markup.png",
+        "plan.pdf",
+    ]
+    for stored in feedback_attachments:
+        assert stored.local_path is not None
+        assert await to_thread(Path(stored.local_path).is_file)
     assert detail.status_code == 200
     assert detail.json()["feedback_message"] == "См. вложение куратора."
-    assert detail.json()["feedback_attachments"][0]["file_name"] == "markup.png"
+    assert {
+        item["file_name"] for item in detail.json()["feedback_attachments"]
+    } == {"markup.png", "plan.pdf"}
 
 
 async def test_review_assignment_and_curator_stats(

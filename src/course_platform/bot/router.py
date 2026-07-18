@@ -55,6 +55,7 @@ from course_platform.services.submissions import (
     HomeworkAttachment,
     LessonNotViewedError,
     NoActiveAssignmentError,
+    NoPendingSubmissionError,
     NotAwaitingQuestionError,
     NotAwaitingSubmissionError,
     SubmissionPendingError,
@@ -2468,7 +2469,23 @@ class MessageRouter:
                 caption=message.caption,
             )
         except NotAwaitingSubmissionError:
-            return self._unknown_command_text()
+            # Albums arrive as separate messages: the first one completes the
+            # submission, the rest should join it instead of confusing the bot.
+            try:
+                appended = await self._submissions.append_attachment(
+                    telegram_user_id,
+                    attachment,
+                    caption=message.caption,
+                )
+            except NoPendingSubmissionError:
+                return self._unknown_command_text()
+            return (
+                "📎 <b>Файл добавлен к отправленной работе</b>\n\n"
+                f"📘 Урок {appended.lesson_position}: "
+                f"{escape(appended.lesson_title)}\n"
+                f"🔁 Попытка: {appended.attempt_number}\n"
+                f"Вложений в работе: <b>{appended.attachment_count}</b>"
+            )
         except UnsupportedSubmissionKindError:
             return (
                 "⚠️ <b>Неверный формат</b>\n\n"

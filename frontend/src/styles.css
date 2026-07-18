@@ -1128,6 +1128,9 @@ body {
 .feedback-upload-field small { color: #8c9db1; font-weight: 500; }
 .feedback-upload-field__clear { justify-self: start; padding: 4px 10px; color: #dce7f2; font-size: 12px; font-weight: 600; background: transparent; border: 1px solid #304760; border-radius: 8px; cursor: pointer; }
 .feedback-upload-field__clear:hover { border-color: #4a6785; }
+.attachment-card__download { margin-left: auto; padding: 6px 12px; color: #dce7f2; font-size: 12px; font-weight: 600; white-space: nowrap; background: #16273c; border: 1px solid #304760; border-radius: 8px; cursor: pointer; }
+.attachment-card__download:hover { border-color: #4a6785; }
+.attachment-card__download:disabled { opacity: 0.6; cursor: default; }
 .review-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 18px 24px; background: #fafbf9; border-top: 1px solid #e8eae6; }
 .dashboard-shell--reviews .review-modal .review-actions { background: #0b1625; border-color: #25374e; }
 .review-actions button { min-height: 42px; padding: 0 17px; border-radius: 9px; font-weight: 750; }

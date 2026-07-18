@@ -635,21 +635,24 @@ async def decide_review_with_attachment(
     reviews: ReviewServiceDependency,
     verdict: Annotated[FeedbackVerdict, Form()],
     message: Annotated[str, Form()] = "",
-    attachment: Annotated[UploadFile | None, File()] = None,
+    attachments: Annotated[list[UploadFile] | None, File()] = None,
 ) -> ReviewDecisionResponse:
-    if attachment is None:
+    uploads = attachments or []
+    if not uploads:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Attachment file is required",
         )
-    stored_attachment = await _store_feedback_upload(attachment, settings)
+    stored_attachments = tuple(
+        [await _store_feedback_upload(upload, settings) for upload in uploads]
+    )
     try:
         result = await reviews.review_by_staff_id(
             submission_id=submission_id,
             reviewer_id=staff.id,
             verdict=verdict,
             message=message,
-            attachments=(stored_attachment,),
+            attachments=stored_attachments,
         )
     except SubmissionNotFoundError:
         raise HTTPException(

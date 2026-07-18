@@ -27,14 +27,14 @@ interface ReviewModalProps {
     item: ReviewQueueItem,
     verdict: ReviewVerdict,
     message: string,
-    attachment?: File | null,
+    attachments?: File[],
   ) => Promise<void>;
 }
 
 export function ReviewModal({ item, staff, onChanged, onClose, onDecision }: ReviewModalProps) {
   const [detail, setDetail] = useState<ReviewDetail | null>(null);
   const [comment, setComment] = useState("");
-  const [feedbackFile, setFeedbackFile] = useState<File | null>(null);
+  const [feedbackFiles, setFeedbackFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busyVerdict, setBusyVerdict] = useState<ReviewVerdict | null>(null);
   const [assignmentBusy, setAssignmentBusy] = useState(false);
@@ -53,11 +53,12 @@ export function ReviewModal({ item, staff, onChanged, onClose, onDecision }: Rev
       }
       event.preventDefault();
       const extension = pasted.type.split("/")[1] ?? "png";
-      setFeedbackFile(
-        new File([pasted], `Скриншот ${new Date().toLocaleString("ru-RU")}.${extension}`, {
-          type: pasted.type,
-        }),
+      const named = new File(
+        [pasted],
+        `Скриншот ${new Date().toLocaleString("ru-RU")}.${extension}`,
+        { type: pasted.type },
       );
+      setFeedbackFiles((current) => [...current, named]);
     }
     document.addEventListener("paste", handlePaste);
     return () => document.removeEventListener("paste", handlePaste);
@@ -85,14 +86,14 @@ export function ReviewModal({ item, staff, onChanged, onClose, onDecision }: Rev
 
   async function decide(verdict: ReviewVerdict) {
     const normalizedComment = comment.trim();
-    if (!normalizedComment && !feedbackFile) {
+    if (!normalizedComment && feedbackFiles.length === 0) {
       setError("Добавь комментарий или прикрепи файл для ученика");
       return;
     }
     setBusyVerdict(verdict);
     setError(null);
     try {
-      await onDecision(item, verdict, normalizedComment, feedbackFile);
+      await onDecision(item, verdict, normalizedComment, feedbackFiles);
       onClose();
     } catch (caughtError) {
       setError(
@@ -341,29 +342,39 @@ export function ReviewModal({ item, staff, onChanged, onClose, onDecision }: Rev
                 />
               </label>
               <label className="feedback-upload-field">
-                <span>Файл к ответу — необязательно</span>
+                <span>Файлы к ответу — необязательно</span>
                 <input
                   type="file"
+                  multiple
                   accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
                   onChange={(event) => {
-                    setFeedbackFile(event.target.files?.[0] ?? null);
+                    const picked = Array.from(event.target.files ?? []);
+                    if (picked.length) {
+                      setFeedbackFiles((current) => [...current, ...picked]);
+                    }
+                    event.target.value = "";
                   }}
                 />
                 <small>
-                  {feedbackFile
-                    ? `Выбран файл: ${feedbackFile.name}`
-                    : "Можно приложить фото с пометками, PDF или другой файл. " +
-                      "Скриншот можно просто вставить: Ctrl+V."}
+                  {feedbackFiles.length
+                    ? `Файлов к отправке: ${feedbackFiles.length}`
+                    : "Можно приложить несколько файлов: фото с пометками, PDF и другое. " +
+                      "Скриншоты можно просто вставлять: Ctrl+V."}
                 </small>
-                {feedbackFile && (
+                {feedbackFiles.map((file, index) => (
                   <button
+                    key={`${file.name}-${index}`}
                     type="button"
                     className="feedback-upload-field__clear"
-                    onClick={() => setFeedbackFile(null)}
+                    onClick={() =>
+                      setFeedbackFiles((current) =>
+                        current.filter((_, position) => position !== index),
+                      )
+                    }
                   >
-                    ✕ Убрать файл
+                    ✕ {file.name}
                   </button>
-                )}
+                ))}
               </label>
               {error && <div className="review-modal__error form-error">{error}</div>}
               <div className="review-actions">
@@ -418,6 +429,27 @@ export function AttachmentCard({
   const [imageExpanded, setImageExpanded] = useState(false);
   const isVideo = attachment.kind === "video" || attachment.kind === "video_note";
   const isPhoto = attachment.kind === "photo";
+  const isDocument = attachment.kind === "document";
+
+  async function downloadDocument() {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const loadPlayback = owner === "curator"
+        ? getFeedbackAttachmentPlayback
+        : getAttachmentPlayback;
+      const playback = await loadPlayback(submissionId, attachment.id);
+      window.open(playback.url, "_blank", "noopener");
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof APIError
+          ? caughtError.message
+          : "Файл временно недоступен",
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }
 
   useEffect(() => {
     if (!isPhoto || !attachment.source_available) return;
@@ -519,6 +551,16 @@ export function AttachmentCard({
           <strong>{attachment.file_name || attachmentLabel(attachment.kind)}</strong>
           <span>{attachmentMeta(attachment)}</span>
         </div>
+        {isDocument && attachment.source_available && (
+          <button
+            type="button"
+            className="attachment-card__download"
+            onClick={() => void downloadDocument()}
+            disabled={isLoading}
+          >
+            {isLoading ? "Готовим…" : "Скачать ↓"}
+          </button>
+        )}
         <span className="attachment-source">
           {attachment.source_available
             ? source === "discord" ? "Discord" : "Telegram"
