@@ -41,6 +41,29 @@ export function ReviewModal({ item, staff, onChanged, onClose, onDecision }: Rev
   const isReviewed = item.status === "accepted" || item.status === "revision_requested";
 
   useEffect(() => {
+    if (isReviewed) {
+      return;
+    }
+    function handlePaste(event: ClipboardEvent) {
+      const pasted = Array.from(event.clipboardData?.files ?? []).find((candidate) =>
+        candidate.type.startsWith("image/"),
+      );
+      if (!pasted) {
+        return;
+      }
+      event.preventDefault();
+      const extension = pasted.type.split("/")[1] ?? "png";
+      setFeedbackFile(
+        new File([pasted], `Скриншот ${new Date().toLocaleString("ru-RU")}.${extension}`, {
+          type: pasted.type,
+        }),
+      );
+    }
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  }, [isReviewed]);
+
+  useEffect(() => {
     let active = true;
     setDetail(null);
     setError(null);
@@ -329,8 +352,18 @@ export function ReviewModal({ item, staff, onChanged, onClose, onDecision }: Rev
                 <small>
                   {feedbackFile
                     ? `Выбран файл: ${feedbackFile.name}`
-                    : "Можно приложить фото с пометками, PDF или другой файл."}
+                    : "Можно приложить фото с пометками, PDF или другой файл. " +
+                      "Скриншот можно просто вставить: Ctrl+V."}
                 </small>
+                {feedbackFile && (
+                  <button
+                    type="button"
+                    className="feedback-upload-field__clear"
+                    onClick={() => setFeedbackFile(null)}
+                  >
+                    ✕ Убрать файл
+                  </button>
+                )}
               </label>
               {error && <div className="review-modal__error form-error">{error}</div>}
               <div className="review-actions">
