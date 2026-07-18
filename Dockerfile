@@ -13,6 +13,8 @@ RUN apt-get update \
 COPY pyproject.toml README.md alembic.ini ./
 COPY migrations ./migrations
 COPY src ./src
+# Lesson materials may reference bundled course images by repo-relative path.
+COPY frontend/public/course-assets ./frontend/public/course-assets
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install .
