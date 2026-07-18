@@ -94,7 +94,11 @@ class LearningService:
         async with self._session_factory() as session:
             row = (
                 await session.execute(
-                    select(Course, Enrollment.current_lesson_position)
+                    select(
+                        Course,
+                        Enrollment.current_lesson_position,
+                        Enrollment.status,
+                    )
                     .join(Cohort, Cohort.course_id == Course.id)
                     .join(Enrollment, Enrollment.cohort_id == Cohort.id)
                     .join(Student, Student.id == Enrollment.student_id)
@@ -109,7 +113,8 @@ class LearningService:
             ).one_or_none()
             if row is None:
                 return None
-            course, current_position = row
+            course, current_position, enrollment_status = row
+            course_completed = enrollment_status is EnrollmentStatus.COMPLETED
             lessons = list(
                 await session.scalars(
                     select(Lesson)
@@ -129,8 +134,13 @@ class LearningService:
                         lesson_id=lesson.id,
                         position=lesson.position,
                         title=lesson.title,
-                        is_current=lesson.position == current_position,
-                        is_available=lesson.position <= current_position,
+                        is_current=(
+                            not course_completed
+                            and lesson.position == current_position
+                        ),
+                        is_available=(
+                            course_completed or lesson.position <= current_position
+                        ),
                     )
                     for lesson in lessons
                 ),

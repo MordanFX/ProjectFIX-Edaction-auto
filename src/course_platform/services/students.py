@@ -57,6 +57,7 @@ class ProgressSnapshot:
     total_lessons: int
     accepted_submissions: int
     total_assignments: int
+    is_completed: bool = False
 
 
 class StudentStage(StrEnum):
@@ -249,6 +250,7 @@ class StudentService:
                     select(
                         Enrollment.id,
                         Enrollment.current_lesson_position,
+                        Enrollment.status,
                         Course.id.label("course_id"),
                         Course.title,
                     )
@@ -257,7 +259,9 @@ class StudentService:
                     .join(Course, Cohort.course_id == Course.id)
                     .where(
                         Student.telegram_user_id == telegram_user_id,
-                        Enrollment.status == EnrollmentStatus.ACTIVE,
+                        Enrollment.status.in_(
+                            (EnrollmentStatus.ACTIVE, EnrollmentStatus.COMPLETED)
+                        ),
                     )
                     .order_by(Enrollment.created_at.desc())
                     .limit(1)
@@ -288,6 +292,7 @@ class StudentService:
                 total_lessons=total_lessons or 0,
                 accepted_submissions=accepted_submissions or 0,
                 total_assignments=total_assignments or 0,
+                is_completed=enrollment_row.status is EnrollmentStatus.COMPLETED,
             )
 
     async def get_journey(self, telegram_user_id: int) -> StudentJourney | None:

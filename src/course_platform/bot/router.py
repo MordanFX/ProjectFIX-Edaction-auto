@@ -1395,6 +1395,17 @@ class MessageRouter:
                 "Материалы курса пока не опубликованы."
             )
 
+        if progress.is_completed:
+            return (
+                f"🏆 <b>КУРС ЗАВЕРШЁН</b>\n\n"
+                f"🎓 <b>{escape(progress.course_title)}</b>\n\n"
+                f"📘 Пройдено уроков: <b>{progress.total_lessons} "
+                f"из {progress.total_lessons}</b>\n"
+                f"✅ Принято ДЗ: <b>{progress.accepted_submissions} "
+                f"из {progress.total_assignments}</b>\n\n"
+                "Все материалы остаются доступными в «📚 Программа курса»."
+            )
+
         current_position = min(progress.current_lesson_position, progress.total_lessons)
         if progress.total_assignments:
             percentage = round(progress.accepted_submissions / progress.total_assignments * 100)

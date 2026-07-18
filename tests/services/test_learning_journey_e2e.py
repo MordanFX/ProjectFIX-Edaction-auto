@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from course_platform.dev.seed_demo import seed_demo_data
 from course_platform.models import Enrollment, Submission
 from course_platform.models.enums import EnrollmentStatus, FeedbackVerdict, SubmissionStatus
+from course_platform.services.learning import LearningService
 from course_platform.services.notifications import FeedbackNotificationService
 from course_platform.services.progression import ProgressionService
 from course_platform.services.reviews import ReviewService
@@ -67,6 +68,17 @@ async def test_complete_course_journey_keeps_feedback_stages_correct(
     final_journey = await students.get_journey(telegram_user_id)
     assert final_journey is not None
     assert final_journey.stage is StudentStage.COURSE_COMPLETED
+
+    # Итоги и программа курса остаются доступными после завершения.
+    final_progress = await students.get_progress(telegram_user_id)
+    assert final_progress is not None
+    assert final_progress.is_completed is True
+    assert final_progress.accepted_submissions == 3
+
+    outline = await LearningService(session_factory).get_course_outline(telegram_user_id)
+    assert outline is not None
+    assert all(lesson.is_available for lesson in outline.lessons)
+    assert not any(lesson.is_current for lesson in outline.lessons)
 
     async with session_factory() as session:
         enrollment = await session.scalar(select(Enrollment))
