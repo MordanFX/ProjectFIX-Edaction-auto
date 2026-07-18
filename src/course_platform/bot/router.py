@@ -591,11 +591,34 @@ class MessageRouter:
                 callback.message.message_id,
                 self._completed_lesson_reply_markup(refreshed or lesson),
             )
+            homework_pending = (
+                not result.course_completed
+                and result.current_lesson_position == result.lesson_position
+                and (refreshed or lesson).assignment_instructions is not None
+            )
+            if homework_pending:
+                text = (
+                    "✅ <b>МАТЕРИАЛЫ ОТМЕЧЕНЫ</b>\n\n"
+                    "Осталось домашнее задание — открой его кнопкой ниже."
+                )
+                reply_markup: dict[str, object] = {
+                    "inline_keyboard": [
+                        [
+                            {
+                                "text": "📝 Открыть домашнее задание",
+                                "callback_data": f"homework:{lesson_id}",
+                            }
+                        ]
+                    ]
+                }
+            else:
+                text = self._viewed_result_text(result)
+                reply_markup = await self._main_keyboard(callback.sender.id)
             await self._api.send_message(
                 callback.message.chat.id,
-                self._viewed_result_text(result),
+                text,
                 parse_mode="HTML",
-                reply_markup=await self._main_keyboard(callback.sender.id),
+                reply_markup=reply_markup,
             )
         return True
 

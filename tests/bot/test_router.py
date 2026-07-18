@@ -576,12 +576,13 @@ async def test_viewed_callback_updates_lesson_and_unlocks_homework(
         for method, payload in api_calls
         if method == "sendMessage" and "МАТЕРИАЛЫ ОТМЕЧЕНЫ" in str(payload["text"])
     )
-    button_labels = {
-        button["text"]
-        for row in viewed_message["reply_markup"]["keyboard"]
+    inline_buttons = [
+        button
+        for row in viewed_message["reply_markup"]["inline_keyboard"]
         for button in row
-    }
-    assert "📥 Сдать ДЗ" in button_labels
+    ]
+    assert inline_buttons[0]["text"] == "📝 Открыть домашнее задание"
+    assert inline_buttons[0]["callback_data"].startswith("homework:")
     assert "СДАЧА ДОМАШНЕГО ЗАДАНИЯ" in str(api_calls[-1][1]["text"])
 
 
