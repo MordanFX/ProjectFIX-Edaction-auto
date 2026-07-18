@@ -694,7 +694,9 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .student-review-work__lesson { min-width: 0; display: grid; gap: 4px; }
 .student-review-work__lesson strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .student-review-work__lesson small { color: #71869b; font-size: 8px; }
-.student-review-work__status { padding: 5px 7px; color: #bdddff; background: #17466d; border-radius: 6px; font-size: 8px; font-weight: 800; }
+.student-review-work__status { display: inline-flex; flex-direction: column; gap: 3px; align-items: center; padding: 5px 7px; color: #bdddff; background: #17466d; border-radius: 6px; font-size: 8px; font-weight: 800; }
+.student-review-work__assignee { color: #ffd97a; font-style: normal; font-size: 8px; font-weight: 700; white-space: nowrap; }
+.student-review-work__assignee--mine { color: #9df2b1; }
 .student-review-work--accepted .student-review-work__status { color: #a8edf2; background: #17444d; }
 .student-review-work--revision_requested .student-review-work__status { color: #ffd0b7; background: #563526; }
 .student-review-work__action { display: none; color: #69baff; font-size: 9px; font-weight: 800; }

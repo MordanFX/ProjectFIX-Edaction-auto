@@ -272,7 +272,7 @@ export function App() {
         <section className="dashboard-content">
           {error && <div className="page-error">{error}</div>}
           {notice && <div className="toast">✓ {notice}</div>}
-          {section === "reviews" && <ReviewsSection queue={data.queue} summary={data.summary} onRefresh={handleRefresh} onSelect={setSelectedReview} />}
+          {section === "reviews" && <ReviewsSection queue={data.queue} summary={data.summary} staffId={data.staff.id} onRefresh={handleRefresh} onSelect={setSelectedReview} />}
           {section === "discord" && (
             <DiscordSection
               overview={data.discord}

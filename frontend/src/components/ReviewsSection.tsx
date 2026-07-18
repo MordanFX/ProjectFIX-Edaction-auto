@@ -11,6 +11,7 @@ type ReviewFilter = "all" | "pending" | "reviewed";
 interface ReviewsSectionProps {
   queue: ReviewQueueItem[];
   summary: DashboardSummary;
+  staffId: string;
   onRefresh: () => Promise<void>;
   onSelect: (item: ReviewQueueItem) => void;
 }
@@ -18,6 +19,7 @@ interface ReviewsSectionProps {
 export function ReviewsSection({
   queue,
   summary,
+  staffId,
   onRefresh,
   onSelect,
 }: ReviewsSectionProps) {
@@ -107,6 +109,7 @@ export function ReviewsSection({
               <StudentReviewCard
                 key={group.studentId}
                 group={group}
+                staffId={staffId}
                 onSelect={onSelect}
               />
             ))}
@@ -167,9 +170,11 @@ interface StudentReviewGroup {
 
 function StudentReviewCard({
   group,
+  staffId,
   onSelect,
 }: {
   group: StudentReviewGroup;
+  staffId: string;
   onSelect: (item: ReviewQueueItem) => void;
 }) {
   const pendingCount = group.items.filter(isPending).length;
@@ -212,6 +217,19 @@ function StudentReviewCard({
             </span>
             <span className="student-review-work__status">
               {statusLabel(item)}
+              {isPending(item) && item.assigned_reviewer_id && (
+                <em
+                  className={`student-review-work__assignee ${
+                    item.assigned_reviewer_id === staffId
+                      ? "student-review-work__assignee--mine"
+                      : ""
+                  }`}
+                >
+                  {item.assigned_reviewer_id === staffId
+                    ? "Взята вами"
+                    : `У ${item.assigned_reviewer_name ?? "куратора"}`}
+                </em>
+              )}
             </span>
             <span className="student-review-work__action">Открыть →</span>
           </button>
