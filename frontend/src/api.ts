@@ -121,6 +121,12 @@ export function updateStaffMember(staffId: string, payload: StaffUpdate): Promis
   });
 }
 
+export function deleteTelegramStudent(studentId: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/api/students/${studentId}`, {
+    method: "DELETE",
+  });
+}
+
 export function getReviewQueue(source?: "telegram" | "discord"): Promise<ReviewQueueItem[]> {
   const query = source ? `?source=${source}` : "";
   return request<ReviewQueueItem[]>(`/api/reviews${query}`);

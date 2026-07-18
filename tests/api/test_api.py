@@ -22,6 +22,7 @@ from course_platform.models import (
     Lesson,
     LessonMaterial,
     StaffUser,
+    Student,
     Submission,
     SubmissionAttachment,
 )
@@ -106,6 +107,52 @@ async def test_health_is_public(
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+async def test_admin_can_delete_telegram_student_for_retest(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await create_staff(session_factory, role=StaffRole.ADMIN)
+    registered = await StudentService(session_factory).register(
+        StudentRegistration(telegram_user_id=777, first_name="Retest")
+    )
+
+    async with build_client(session_factory) as client:
+        token = await login(client)
+        deleted = await client.delete(
+            f"/api/students/{registered.student_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        students = await client.get(
+            "/api/students",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    async with session_factory() as session:
+        student = await session.get(Student, registered.student_id)
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {"deleted": True}
+    assert students.json() == []
+    assert student is None
+
+
+async def test_curator_cannot_delete_telegram_student(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await create_staff(session_factory)
+    registered = await StudentService(session_factory).register(
+        StudentRegistration(telegram_user_id=778, first_name="Retest")
+    )
+
+    async with build_client(session_factory) as client:
+        token = await login(client)
+        response = await client.delete(
+            f"/api/students/{registered.student_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 403
 
 
 async def test_discord_overview_requires_auth_and_returns_linked_space(

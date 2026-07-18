@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from course_platform.api.dependencies import (
     AdminDashboardServiceDependency,
+    CurrentAdminDependency,
     CurrentStaffDependency,
     StudentAccessServiceDependency,
 )
@@ -118,4 +119,26 @@ async def update_student_access(
             detail="Unable to update student access",
         ) from None
     return StudentAccessUpdateResponse.from_domain(detail)
-    return StudentLessonDetailResponse.from_domain(detail)
+
+
+@router.delete("/{student_id}")
+async def delete_telegram_student(
+    student_id: UUID,
+    admin: CurrentAdminDependency,
+    access: StudentAccessServiceDependency,
+) -> dict[str, bool]:
+    del admin
+    try:
+        await access.delete_telegram_student(student_id=student_id)
+    except StudentAccessError as error:
+        detail_code = str(error)
+        if detail_code == "telegram-student-not-found":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Telegram student not found",
+            ) from None
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to delete Telegram student",
+        ) from None
+    return {"deleted": True}

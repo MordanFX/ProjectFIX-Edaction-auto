@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import {
   APIError,
+  deleteTelegramStudent,
   getCourseCohorts,
   getStudentDetail,
   getStudentLessonDetail,
@@ -51,6 +52,8 @@ export function StudentModal({
   const [lessonDetail, setLessonDetail] = useState<StudentLessonDetail | null>(null);
   const [lessonLoading, setLessonLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<StudentTab>("overview");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [form, setForm] = useState<AccessForm>({
     cohort_id: overview.cohort_id ?? "",
     status: overview.enrollment_status ?? "active",
@@ -159,6 +162,24 @@ export function StudentModal({
       setAccessError("Не удалось загрузить детали урока");
     } finally {
       setLessonLoading(false);
+    }
+  }
+
+  async function deleteStudent() {
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await deleteTelegramStudent(overview.student_id);
+      await onChanged();
+      onClose();
+    } catch (caughtError) {
+      setDeleteError(
+        caughtError instanceof APIError
+          ? caughtError.message
+          : "Не удалось удалить ученика",
+      );
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -361,12 +382,15 @@ export function StudentModal({
                   loading={cohortsLoading}
                   saving={accessSaving}
                   error={accessError}
+                  deleteError={deleteError}
+                  deleteBusy={deleteBusy}
                   onCourseChange={(courseId) => {
                     setSelectedCourseId(courseId);
                     setForm({ ...form, cohort_id: "" });
                   }}
                   onFormChange={setForm}
                   onSave={() => void saveAccess()}
+                  onDelete={() => void deleteStudent()}
                 />
               </div>
             )}
@@ -386,9 +410,12 @@ function AccessSection({
   loading,
   saving,
   error,
+  deleteError,
+  deleteBusy,
   onCourseChange,
   onFormChange,
   onSave,
+  onDelete,
 }: {
   detail: StudentDetail;
   courses: CourseOverview[];
@@ -398,9 +425,12 @@ function AccessSection({
   loading: boolean;
   saving: boolean;
   error: string | null;
+  deleteError: string | null;
+  deleteBusy: boolean;
   onCourseChange: (courseId: string) => void;
   onFormChange: (form: AccessForm) => void;
   onSave: () => void;
+  onDelete: () => void;
 }) {
   return (
     <section className="student-detail__section student-detail__section--access">
@@ -466,11 +496,22 @@ function AccessSection({
         )}
       </div>
       {error && <div className="form-error">{error}</div>}
+      {deleteError && <div className="form-error">{deleteError}</div>}
       <div className="student-access-actions">
         <span>{loading ? "Загружаем группы…" : detail.cohort_title ?? "Выбери курс и группу"}</span>
-        <button className="secondary-button" disabled={saving || loading || !form.cohort_id} onClick={onSave}>
-          {saving ? "Сохраняем…" : detail.course_id ? "Сохранить доступ" : "Назначить курс"}
-        </button>
+        <div className="student-access-actions__buttons">
+          <button
+            type="button"
+            className="student-delete-button"
+            disabled={deleteBusy}
+            onClick={onDelete}
+          >
+            {deleteBusy ? "Удаляем…" : "Удалить ученика"}
+          </button>
+          <button className="secondary-button" disabled={saving || loading || !form.cohort_id} onClick={onSave}>
+            {saving ? "Сохраняем…" : detail.course_id ? "Сохранить доступ" : "Назначить курс"}
+          </button>
+        </div>
       </div>
     </section>
   );

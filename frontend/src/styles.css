@@ -1356,6 +1356,12 @@ body {
   border-top: 1px solid #263d55;
 }
 .student-access-actions > span { color: #8196ab; font-size: 10px; }
+.student-access-actions__buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
 .student-access-actions .secondary-button {
   flex: 0 0 auto;
   color: #d8edff;
@@ -1363,6 +1369,23 @@ body {
   border-color: #2c618c;
 }
 .student-access-actions .secondary-button:hover { background: #19466d; border-color: #3b7bae; }
+.student-delete-button {
+  padding: 11px 14px;
+  color: #ffd9d4;
+  background: #3a1e1f;
+  border: 1px solid #70403c;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 850;
+}
+.student-delete-button:hover:not(:disabled) {
+  background: #4b2626;
+  border-color: #99534c;
+}
+.student-delete-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 
 .brand-logo { width: 48px; height: 48px; display: block; object-fit: cover; border: 1px solid rgb(255 255 255 / 16%); border-radius: 14px; box-shadow: 0 8px 24px rgb(0 0 0 / 24%); }
 .brand-logo--loading { width: 72px; height: 72px; border-radius: 20px; }

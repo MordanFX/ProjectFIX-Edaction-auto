@@ -507,13 +507,59 @@ class StudentAccessService:
                 await session.flush()
             cohort_id = cohort.id
 
+            # Re-granting the same course must resume from the student's
+            # progress: resetting to lesson 1 over completed progress rows
+            # dead-locks the enrollment (lesson «пройден», позиция стоит).
+            resume_position = 1
+            existing = await session.scalar(
+                select(Enrollment)
+                .where(
+                    Enrollment.student_id == student_id,
+                    Enrollment.cohort_id == cohort_id,
+                )
+                .order_by(Enrollment.created_at.desc())
+                .limit(1)
+            )
+            if existing is not None:
+                first_open = await session.scalar(
+                    select(func.min(Lesson.position))
+                    .outerjoin(
+                        LessonProgress,
+                        (LessonProgress.lesson_id == Lesson.id)
+                        & (LessonProgress.enrollment_id == existing.id),
+                    )
+                    .where(
+                        Lesson.course_id == course.id,
+                        Lesson.is_published.is_(True),
+                        LessonProgress.status.is_(None)
+                        | (LessonProgress.status != LessonProgressStatus.COMPLETED),
+                    )
+                )
+                if first_open is not None:
+                    resume_position = first_open
+                else:
+                    last_position = await session.scalar(
+                        select(func.max(Lesson.position)).where(
+                            Lesson.course_id == course.id,
+                            Lesson.is_published.is_(True),
+                        )
+                    )
+                    resume_position = last_position or 1
+
         return await self.update_enrollment(
             student_id=student_id,
             cohort_id=cohort_id,
             status=EnrollmentStatus.ACTIVE,
             access_type=access_type,
-            current_lesson_position=1,
+            current_lesson_position=resume_position,
         )
+
+    async def delete_telegram_student(self, *, student_id: UUID) -> None:
+        async with session_scope(self._session_factory) as session:
+            student = await session.get(Student, student_id)
+            if student is None or student.origin is not StudentOrigin.TELEGRAM:
+                raise StudentAccessError("telegram-student-not-found")
+            await session.delete(student)
 
     async def assign_discord_course(self, *, student_id: UUID, course_id: UUID) -> Any:
         async with session_scope(self._session_factory) as session:
