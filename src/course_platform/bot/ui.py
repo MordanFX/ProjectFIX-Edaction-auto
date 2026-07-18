@@ -65,7 +65,8 @@ def feedback_notification_text(notification: FeedbackNotification) -> str:
         return (
             "🔄 <b>ДЗ нужно доработать</b>\n\n"
             f"Комментарий куратора:\n{escape(notification.message)}\n\n"
-            "Исправь работу и нажми «🔄 Отправить доработку»."
+            "Исправь работу и просто пришли новую версию сообщением — "
+            "текстом, файлом, фото или видео."
         )
     if notification.course_completed:
         return (

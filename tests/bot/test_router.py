@@ -1245,3 +1245,89 @@ async def test_album_second_photo_joins_submitted_homework(
         method == "sendMessage" and "Не понял сообщение" in str(payload.get("text"))
         for method, payload in api_calls
     )
+
+
+async def test_revision_answer_is_accepted_without_pressing_the_button(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+    await ProgressionService(session_factory).mark_current_viewed(555)
+    submissions = SubmissionService(session_factory)
+    reviews = ReviewService(session_factory)
+    await submissions.begin(555)
+    await submissions.submit_text(555, "Первая версия")
+    async with session_factory() as session:
+        first_id = await session.scalar(select(Submission.id))
+    assert first_id is not None
+    await reviews.review(
+        submission_id=first_id,
+        reviewer_telegram_user_id=555,
+        verdict=FeedbackVerdict.REVISION_REQUESTED,
+        message="Доработай",
+    )
+
+    api_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", maxsplit=1)[-1]
+        payload = json.loads(request.content)
+        api_calls.append((method, payload))
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": len(api_calls),
+                    "date": 1_700_000_003,
+                    "chat": {"id": 555, "type": "private"},
+                    "text": payload.get("text", ""),
+                },
+            },
+        )
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            submissions,
+            reviews,
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+        )
+        # Текст доработки без кнопки «Отправить доработку».
+        await router.handle(message_update("готово линк на ноушен"))
+
+        async with session_factory() as session:
+            second_id = await session.scalar(
+                select(Submission.id).where(Submission.attempt_number == 2)
+            )
+        assert second_id is not None
+        await reviews.review(
+            submission_id=second_id,
+            reviewer_telegram_user_id=555,
+            verdict=FeedbackVerdict.REVISION_REQUESTED,
+            message="Ещё раз",
+        )
+        # Фото доработки тоже без кнопки.
+        await router.handle(photo_update())
+
+    async with session_factory() as session:
+        attempts = sorted(
+            (await session.scalars(select(Submission.attempt_number))).all()
+        )
+
+    assert attempts == [1, 2, 3]
+    receipts = [
+        payload
+        for method, payload in api_calls
+        if method == "sendMessage"
+        and "ДОМАШНЕЕ ЗАДАНИЕ ОТПРАВЛЕНО" in str(payload.get("text"))
+    ]
+    assert len(receipts) == 2
+    assert not any(
+        method == "sendMessage" and "Не понял сообщение" in str(payload.get("text"))
+        for method, payload in api_calls
+    )

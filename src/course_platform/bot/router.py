@@ -62,6 +62,7 @@ from course_platform.services.submissions import (
     SubmissionPrompt,
     SubmissionReceipt,
     SubmissionService,
+    SubmissionWorkflowError,
     UnsupportedSubmissionKindError,
 )
 
@@ -2316,12 +2317,51 @@ class MessageRouter:
         try:
             receipt = await self._submissions.submit_text(telegram_user_id, text)
         except NotAwaitingSubmissionError:
-            return self._unknown_command_text()
+            return await self._accept_revision_text(telegram_user_id, text)
         except EmptySubmissionError:
             return "⚠️ Ответ пустой. Пришли текст домашнего задания одним сообщением."
         except UnsupportedSubmissionKindError:
             return "📎 Для этого задания требуется другой формат ответа."
 
+        return self._submission_receipt_text(receipt)
+
+    async def _accept_autostart_attachment(
+        self,
+        telegram_user_id: int,
+        attachment: HomeworkAttachment,
+        caption: str | None,
+    ) -> str:
+        """A student sends the answer file without pressing the submit button."""
+        try:
+            await self._submissions.begin(telegram_user_id)
+        except SubmissionWorkflowError:
+            return self._unknown_command_text()
+        try:
+            receipt = await self._submissions.submit_attachment(
+                telegram_user_id,
+                attachment,
+                caption=caption,
+            )
+        except UnsupportedSubmissionKindError:
+            return (
+                "⚠️ <b>Неверный формат</b>\n\n"
+                "Для этого задания нужен другой тип ответа. "
+                "Режим сдачи остаётся активным."
+            )
+        except SubmissionWorkflowError:
+            return self._unknown_command_text()
+        return self._submission_receipt_text(receipt)
+
+    async def _accept_revision_text(self, telegram_user_id: int, text: str) -> str:
+        """A student on revision writes the fixed answer without pressing the button."""
+        journey = await self._students.get_journey(telegram_user_id)
+        if journey is None or journey.stage is not StudentStage.REVISION_REQUESTED:
+            return self._unknown_command_text()
+        try:
+            await self._submissions.begin(telegram_user_id)
+            receipt = await self._submissions.submit_text(telegram_user_id, text)
+        except SubmissionWorkflowError:
+            return self._unknown_command_text()
         return self._submission_receipt_text(receipt)
 
     async def _notify_curators_about_question(
@@ -2478,7 +2518,11 @@ class MessageRouter:
                     caption=message.caption,
                 )
             except NoPendingSubmissionError:
-                return self._unknown_command_text()
+                return await self._accept_autostart_attachment(
+                    telegram_user_id,
+                    attachment,
+                    message.caption,
+                )
             return (
                 "📎 <b>Файл добавлен к отправленной работе</b>\n\n"
                 f"📘 Урок {appended.lesson_position}: "
