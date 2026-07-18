@@ -53,6 +53,7 @@ from course_platform.services.submissions import (
     CuratorQuestionReceipt,
     EmptySubmissionError,
     HomeworkAttachment,
+    JournalFeedbackAttachment,
     LessonNotViewedError,
     NoActiveAssignmentError,
     NoPendingSubmissionError,
@@ -764,6 +765,50 @@ class MessageRouter:
                     else None
                 ),
             )
+            for attachment in entry.feedback_attachments:
+                try:
+                    await self._send_feedback_attachment_copy(
+                        message.chat.id, attachment
+                    )
+                except (TelegramAPIError, TelegramTransportError, OSError):
+                    await self._api.send_message(
+                        message.chat.id,
+                        "⚠️ Не удалось показать вложение куратора. "
+                        "Если оно нужно — напиши куратору.",
+                    )
+
+    async def _send_feedback_attachment_copy(
+        self,
+        chat_id: int,
+        attachment: JournalFeedbackAttachment,
+    ) -> None:
+        if (
+            attachment.source_chat_id is not None
+            and attachment.source_message_id is not None
+        ):
+            await self._api.copy_message(
+                chat_id,
+                attachment.source_chat_id,
+                attachment.source_message_id,
+            )
+            return
+        if attachment.external_url is not None:
+            await self._api.send_message(chat_id, attachment.external_url)
+            return
+        if attachment.local_path is not None:
+            local_path = Path(attachment.local_path)
+            if attachment.kind is AttachmentKind.PHOTO:
+                await self._api.send_photo_file(
+                    chat_id,
+                    local_path,
+                    mime_type=attachment.mime_type or "image/jpeg",
+                )
+            else:
+                await self._api.send_document_file(
+                    chat_id,
+                    local_path,
+                    mime_type=attachment.mime_type or "application/octet-stream",
+                )
 
     async def _send_review_history(self, message: TelegramMessage) -> None:
         if message.sender is None or not await self._reviews.is_reviewer(message.sender.id):

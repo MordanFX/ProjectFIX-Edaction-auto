@@ -14,6 +14,8 @@ from course_platform.bot.ui import curator_keyboard
 from course_platform.dev.seed_demo import seed_demo_data
 from course_platform.models import (
     Enrollment,
+    Feedback,
+    FeedbackAttachment,
     Lesson,
     LessonMaterial,
     StaffUser,
@@ -1329,5 +1331,82 @@ async def test_revision_answer_is_accepted_without_pressing_the_button(
     assert len(receipts) == 2
     assert not any(
         method == "sendMessage" and "Не понял сообщение" in str(payload.get("text"))
+        for method, payload in api_calls
+    )
+
+
+async def test_journal_delivers_curator_feedback_attachments(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+    await ProgressionService(session_factory).mark_current_viewed(555)
+    submissions = SubmissionService(session_factory)
+    reviews = ReviewService(session_factory)
+    await submissions.begin(555)
+    await submissions.submit_text(555, "Моя работа")
+    async with session_factory() as session:
+        submission_id = await session.scalar(select(Submission.id))
+    assert submission_id is not None
+    await reviews.review(
+        submission_id=submission_id,
+        reviewer_telegram_user_id=555,
+        verdict=FeedbackVerdict.ACCEPTED,
+        message="Смотри разметку на фото",
+    )
+    async with session_factory() as session:
+        feedback_id = await session.scalar(select(Feedback.id))
+        assert feedback_id is not None
+        session.add(
+            FeedbackAttachment(
+                feedback_id=feedback_id,
+                kind=AttachmentKind.PHOTO,
+                source_chat_id=999,
+                source_message_id=42,
+            )
+        )
+        await session.commit()
+
+    api_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", maxsplit=1)[-1]
+        payload = json.loads(request.content)
+        api_calls.append((method, payload))
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": len(api_calls),
+                    "date": 1_700_000_003,
+                    "chat": {"id": 555, "type": "private"},
+                    "text": payload.get("text", ""),
+                },
+            },
+        )
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            submissions,
+            reviews,
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+        )
+        await router.handle(message_update("🗂 Мои разборы"))
+
+    assert any(
+        method == "sendMessage"
+        and "Смотри разметку на фото" in str(payload.get("text"))
+        for method, payload in api_calls
+    )
+    assert any(
+        method == "copyMessage"
+        and payload.get("from_chat_id") == 999
+        and payload.get("message_id") == 42
         for method, payload in api_calls
     )

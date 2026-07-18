@@ -14,6 +14,7 @@ from course_platform.models import (
     Course,
     Enrollment,
     Feedback,
+    FeedbackAttachment,
     Lesson,
     LessonProgress,
     StaffUser,
@@ -129,6 +130,16 @@ class HomeworkAttachment:
 
 
 @dataclass(frozen=True, slots=True)
+class JournalFeedbackAttachment:
+    kind: AttachmentKind
+    source_chat_id: int | None
+    source_message_id: int | None
+    external_url: str | None
+    local_path: str | None
+    mime_type: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class StudentJournalEntry:
     lesson_position: int
     lesson_title: str
@@ -137,6 +148,7 @@ class StudentJournalEntry:
     submitted_at: datetime
     reviewed_at: datetime | None
     feedback_message: str | None
+    feedback_attachments: tuple[JournalFeedbackAttachment, ...] = ()
 
 
 class SubmissionService:
@@ -149,17 +161,46 @@ class SubmissionService:
         self, telegram_user_id: int, *, limit: int = 10
     ) -> tuple[StudentJournalEntry, ...]:
         async with self._session_factory() as session:
-            rows = await session.execute(
-                select(Submission, Lesson.position, Lesson.title, Feedback.message)
-                .join(Enrollment, Enrollment.id == Submission.enrollment_id)
-                .join(Student, Student.id == Enrollment.student_id)
-                .join(Assignment, Assignment.id == Submission.assignment_id)
-                .join(Lesson, Lesson.id == Assignment.lesson_id)
-                .outerjoin(Feedback, Feedback.submission_id == Submission.id)
-                .where(Student.telegram_user_id == telegram_user_id)
-                .order_by(Submission.submitted_at.desc())
-                .limit(limit)
-            )
+            rows = (
+                await session.execute(
+                    select(
+                        Submission,
+                        Lesson.position,
+                        Lesson.title,
+                        Feedback.id.label("feedback_id"),
+                        Feedback.message,
+                    )
+                    .join(Enrollment, Enrollment.id == Submission.enrollment_id)
+                    .join(Student, Student.id == Enrollment.student_id)
+                    .join(Assignment, Assignment.id == Submission.assignment_id)
+                    .join(Lesson, Lesson.id == Assignment.lesson_id)
+                    .outerjoin(Feedback, Feedback.submission_id == Submission.id)
+                    .where(Student.telegram_user_id == telegram_user_id)
+                    .order_by(Submission.submitted_at.desc())
+                    .limit(limit)
+                )
+            ).all()
+            feedback_ids = [row.feedback_id for row in rows if row.feedback_id is not None]
+            attachments_by_feedback: dict[Any, list[JournalFeedbackAttachment]] = {}
+            if feedback_ids:
+                attachment_rows = await session.scalars(
+                    select(FeedbackAttachment)
+                    .where(FeedbackAttachment.feedback_id.in_(feedback_ids))
+                    .order_by(FeedbackAttachment.created_at)
+                )
+                for attachment in attachment_rows:
+                    attachments_by_feedback.setdefault(
+                        attachment.feedback_id, []
+                    ).append(
+                        JournalFeedbackAttachment(
+                            kind=attachment.kind,
+                            source_chat_id=attachment.source_chat_id,
+                            source_message_id=attachment.source_message_id,
+                            external_url=attachment.external_url,
+                            local_path=attachment.local_path,
+                            mime_type=attachment.mime_type,
+                        )
+                    )
             return tuple(
                 StudentJournalEntry(
                     lesson_position=row.position,
@@ -169,6 +210,9 @@ class SubmissionService:
                     submitted_at=row.Submission.submitted_at,
                     reviewed_at=row.Submission.reviewed_at,
                     feedback_message=row.message,
+                    feedback_attachments=tuple(
+                        attachments_by_feedback.get(row.feedback_id, [])
+                    ),
                 )
                 for row in rows
             )
