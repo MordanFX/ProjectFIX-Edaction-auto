@@ -1092,3 +1092,97 @@ async def test_lesson_command_reports_completed_lesson_waiting_for_next(
     text = str(sent_messages[0]["text"])
     assert "Текущий урок пройден" in text
     assert "зарегистрируйся" not in text
+
+
+async def test_marking_last_material_finishes_lesson_without_extra_button(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).order_by(Lesson.position))
+        assert lesson is not None
+        session.add_all(
+            [
+                LessonMaterial(
+                    lesson_id=lesson.id,
+                    position=1,
+                    title="Market Logic",
+                    video_source=VideoSource.EXTERNAL_URL,
+                    video_reference="https://vimeo.com/1",
+                ),
+                LessonMaterial(
+                    lesson_id=lesson.id,
+                    position=2,
+                    title="QnA",
+                    video_source=VideoSource.EXTERNAL_URL,
+                    video_reference="https://vimeo.com/2",
+                ),
+            ]
+        )
+        lesson_id = lesson.id
+        await session.commit()
+
+    api_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", maxsplit=1)[-1]
+        payload = json.loads(request.content)
+        api_calls.append((method, payload))
+        if method == "sendMessage":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "message_id": len(api_calls),
+                        "date": 1_700_000_001,
+                        "chat": {"id": 555, "type": "private"},
+                        "text": payload["text"],
+                    },
+                },
+            )
+        return httpx.Response(200, json={"ok": True, "result": True})
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            SubmissionService(session_factory),
+            ReviewService(session_factory),
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+        )
+        await router.handle(message_update("/lesson"))
+        await router.handle(review_callback_update(f"matview:{lesson_id}:1"))
+        await router.handle(review_callback_update(f"matview:{lesson_id}:2"))
+
+    # Первая карточка (0/2) больше не показывает кнопку подтверждения.
+    first_workspace = next(
+        payload
+        for method, payload in api_calls
+        if method == "sendMessage" and "0/2" in str(payload["text"])
+    )
+    first_labels = {
+        button["text"]
+        for row in first_workspace["reply_markup"]["inline_keyboard"]
+        for button in row
+    }
+    assert "✅ Я посмотрел все материалы" not in first_labels
+
+    # После отметки последнего материала урок завершается сам: карточка
+    # показывает шаг сдачи ДЗ и без кнопки подтверждения.
+    final_workspace = next(
+        payload
+        for method, payload in api_calls
+        if method == "sendMessage" and "Шаг 3" in str(payload["text"])
+    )
+    final_labels = {
+        button["text"]
+        for row in final_workspace["reply_markup"]["inline_keyboard"]
+        for button in row
+    }
+    assert "✅ Я посмотрел все материалы" not in final_labels
+    assert "📝 Домашнее задание" in final_labels

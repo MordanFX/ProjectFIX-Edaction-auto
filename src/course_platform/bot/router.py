@@ -1735,7 +1735,13 @@ class MessageRouter:
                     }
                 ]
             )
-        if lesson.is_current and lesson.viewed_at is None:
+        if (
+            lesson.is_current
+            and lesson.viewed_at is None
+            and viewed_count == material_count
+        ):
+            # Fallback for cards left in the «all marked, not finished» state;
+            # the happy path completes the lesson on the last material mark.
             rows.append(
                 [
                     {
@@ -1894,12 +1900,43 @@ class MessageRouter:
             )
             return True
         await self._api.answer_callback_query(callback.id, text="Просмотр отмечен")
-        if callback.message is not None:
-            refreshed = await self._learning.get_available_lesson(
+        if callback.message is None:
+            return True
+        refreshed = await self._learning.get_available_lesson(
+            callback.sender.id, lesson_id
+        )
+        if refreshed is None:
+            return True
+        if (
+            refreshed.is_current
+            and refreshed.viewed_at is None
+            and refreshed.materials
+            and all(material.is_viewed for material in refreshed.materials)
+        ):
+            # The last material was just marked: finish the lesson right away
+            # instead of asking for one more confirmation button.
+            try:
+                result = await self._progression.mark_current_viewed(
+                    callback.sender.id,
+                    expected_lesson_id=lesson_id,
+                )
+            except (LessonMismatchError, ActiveLessonNotFoundError):
+                await self._send_lesson_workspace(callback.message.chat.id, refreshed)
+                return True
+            completed = await self._learning.get_available_lesson(
                 callback.sender.id, lesson_id
             )
-            if refreshed is not None:
-                await self._send_lesson_workspace(callback.message.chat.id, refreshed)
+            if completed is not None and completed.assignment_instructions:
+                await self._send_lesson_workspace(callback.message.chat.id, completed)
+            else:
+                await self._api.send_message(
+                    callback.message.chat.id,
+                    self._viewed_result_text(result),
+                    parse_mode="HTML",
+                    reply_markup=await self._main_keyboard(callback.sender.id),
+                )
+            return True
+        await self._send_lesson_workspace(callback.message.chat.id, refreshed)
         return True
 
     async def _handle_homework_callback(self, update: TelegramUpdate) -> bool:
