@@ -15,6 +15,7 @@ import type {
   StudentLessonDetail,
   StudentOverview,
 } from "../types";
+import { AttachmentCard } from "./ReviewModal";
 import { VimeoPreview } from "./VimeoPreview";
 
 interface StudentModalProps {
@@ -321,6 +322,18 @@ export function StudentModal({
                         <span className={`submission-history__status submission-history__status--${submission.status}`}>
                           {submissionStatus(submission.status)}
                         </span>
+                        {submission.attachments.length > 0 && (
+                          <div className="attachment-list attachment-list--history">
+                            {submission.attachments.map((attachment) => (
+                              <AttachmentCard
+                                key={attachment.id}
+                                submissionId={submission.submission_id}
+                                attachment={attachment}
+                                source="telegram"
+                              />
+                            ))}
+                          </div>
+                        )}
                         {submission.feedback_message && <p>{submission.feedback_message}</p>}
                       </article>
                     ))

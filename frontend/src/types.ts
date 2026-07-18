@@ -302,6 +302,7 @@ export interface StudentSubmissionHistory {
   attachment_count: number;
   feedback_verdict: ReviewVerdict | null;
   feedback_message: string | null;
+  attachments: ReviewAttachment[];
 }
 
 export interface StudentDetail extends StudentOverview {

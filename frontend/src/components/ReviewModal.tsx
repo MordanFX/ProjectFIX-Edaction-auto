@@ -400,7 +400,7 @@ export function ReviewModal({ item, staff, onChanged, onClose, onDecision }: Rev
   );
 }
 
-function AttachmentCard({
+export function AttachmentCard({
   submissionId,
   attachment,
   source,

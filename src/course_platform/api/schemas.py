@@ -446,6 +446,7 @@ class StudentSubmissionHistoryResponse(APIModel):
     attachment_count: int
     feedback_verdict: FeedbackVerdict | None
     feedback_message: str | None
+    attachments: list[ReviewAttachmentResponse] = []
 
 
 class StudentDetailResponse(StudentOverviewResponse):

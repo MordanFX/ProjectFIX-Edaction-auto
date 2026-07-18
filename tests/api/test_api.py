@@ -22,6 +22,7 @@ from course_platform.models import (
     Lesson,
     LessonMaterial,
     StaffUser,
+    Submission,
     SubmissionAttachment,
 )
 from course_platform.models.enums import (
@@ -459,6 +460,21 @@ async def test_review_queue_requires_auth_and_returns_pending_work(
     submissions = SubmissionService(session_factory)
     await submissions.begin(111)
     await submissions.submit_text(111, "Homework from API test")
+    async with session_factory() as session:
+        submitted = await session.scalar(select(Submission))
+        assert submitted is not None
+        session.add(
+            SubmissionAttachment(
+                submission_id=submitted.id,
+                kind=AttachmentKind.PHOTO,
+                telegram_file_id="photo-file",
+                telegram_file_unique_id="photo-unique",
+                mime_type="image/jpeg",
+                source_chat_id=111,
+                source_message_id=7,
+            )
+        )
+        await session.commit()
 
     async with build_client(session_factory) as client:
         unauthorized = await client.get("/api/reviews")
@@ -558,7 +574,7 @@ async def test_review_queue_requires_auth_and_returns_pending_work(
     assert queue[0]["text_body"] == "Homework from API test"
     assert queue[0]["status"] == "submitted"
     assert detail.status_code == 200
-    assert detail.json()["attachments"] == []
+    assert [item["kind"] for item in detail.json()["attachments"]] == ["photo"]
     assert detail.json()["text_body"] == "Homework from API test"
     assert dashboard.status_code == 200
     assert dashboard.json()["pending_reviews"] == 1
@@ -577,6 +593,9 @@ async def test_review_queue_requires_auth_and_returns_pending_work(
     assert student_detail.json()["recent_submissions"][0]["lesson_title"] == (
         "Знакомство с курсом"
     )
+    history_attachments = student_detail.json()["recent_submissions"][0]["attachments"]
+    assert [item["kind"] for item in history_attachments] == ["photo"]
+    assert history_attachments[0]["source_available"] is True
     assert first_lesson_detail.status_code == 200
     assert first_lesson_detail.json()["assignment_instructions"]
     assert first_lesson_detail.json()["attempts"][0]["text_body"] == (

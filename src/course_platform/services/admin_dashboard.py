@@ -37,6 +37,7 @@ from course_platform.models.enums import (
     UnlockRule,
     VideoSource,
 )
+from course_platform.services.reviews import ReviewAttachment, _review_attachment
 
 
 class StudentNotFoundError(RuntimeError):
@@ -101,6 +102,7 @@ class StudentSubmissionHistory:
     attachment_count: int
     feedback_verdict: FeedbackVerdict | None
     feedback_message: str | None
+    attachments: tuple[ReviewAttachment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -585,7 +587,20 @@ class AdminDashboardService:
                     .order_by(Submission.submitted_at.desc())
                     .limit(20)
                 )
-                for history in history_rows:
+                history_entries = list(history_rows)
+                attachments_by_submission: dict[UUID, list[SubmissionAttachment]] = {}
+                submission_ids = [entry.Submission.id for entry in history_entries]
+                if submission_ids:
+                    attachment_rows = await session.scalars(
+                        select(SubmissionAttachment)
+                        .where(SubmissionAttachment.submission_id.in_(submission_ids))
+                        .order_by(SubmissionAttachment.created_at)
+                    )
+                    for attachment in attachment_rows:
+                        attachments_by_submission.setdefault(
+                            attachment.submission_id, []
+                        ).append(attachment)
+                for history in history_entries:
                     recent_submissions.append(
                         StudentSubmissionHistory(
                             submission_id=history.Submission.id,
@@ -598,6 +613,12 @@ class AdminDashboardService:
                             attachment_count=history.attachment_count,
                             feedback_verdict=history.verdict,
                             feedback_message=history.message,
+                            attachments=tuple(
+                                _review_attachment(attachment)
+                                for attachment in attachments_by_submission.get(
+                                    history.Submission.id, []
+                                )
+                            ),
                         )
                     )
                     if history.Submission.submitted_at > last_activity_at:

@@ -798,6 +798,7 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .dashboard-shell--reviews .review-modal .attachments-panel__heading { color: #dce7f2; }
 .dashboard-shell--reviews .review-modal .attachments-panel__heading small { color: #8494a8; }
 .attachment-list { display: grid; gap: 8px; }
+.attachment-list--history { grid-column: 1 / -1; margin-top: 10px; }
 .attachment-card { overflow: hidden; background: #f6f8f5; border: 1px solid #e1e6e1; border-radius: 12px; }
 .dashboard-shell--reviews .review-modal .attachment-card { background: #101f32; border-color: #2b405c; }
 .attachment-card__details { display: flex; align-items: center; gap: 12px; padding: 12px; }
