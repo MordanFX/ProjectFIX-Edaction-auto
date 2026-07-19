@@ -65,6 +65,7 @@ interface DashboardData {
 export function App() {
   const [state, setState] = useState<AppState>("loading");
   const [section, setSection] = useState<Section>("reviews");
+  const [discordOpen, setDiscordOpen] = useState(false);
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -204,55 +205,68 @@ export function App() {
             <i>02</i><b>Telegram ученики</b>
           </button>
           <button
-            className={section === "discord" ? "active" : ""}
-            onClick={() => setSection("discord")}
-          >
-            <i>03</i><b>Discord</b><span>{data.discord.private_spaces}</span>
-          </button>
-          <button
-            className={section === "discord-dispatch" ? "active" : ""}
-            onClick={() => setSection("discord-dispatch")}
-          >
-            <i>04</i><b>Выдать ДЗ Discord</b>
-          </button>
-          <button
-            className={section === "discord-students" ? "active" : ""}
-            onClick={() => setSection("discord-students")}
-          >
-            <i>05</i><b>Discord ученики</b>
-          </button>
-          <button
-            className={section === "discord-access" ? "active" : ""}
-            onClick={() => setSection("discord-access")}
-          >
-            <i>06</i><b>Доступы</b>
-          </button>
-          <button
             className={section === "courses" ? "active" : ""}
             onClick={() => setSection("courses")}
           >
-            <i>07</i><b>Курсы</b>
+            <i>03</i><b>Курсы</b>
           </button>
           <button
             className={section === "knowledge" ? "active" : ""}
             onClick={() => setSection("knowledge")}
           >
-            <i>08</i><b>База знаний</b>
+            <i>04</i><b>База знаний</b>
           </button>
           <button
             className={section === "cabinet" ? "active" : ""}
             onClick={() => setSection("cabinet")}
           >
-            <i>09</i><b>Мой кабинет</b>
+            <i>05</i><b>Мой кабинет</b>
           </button>
           {data.staff.role === "admin" && (
             <button
               className={section === "team" ? "active" : ""}
               onClick={() => setSection("team")}
             >
-              <i>10</i><b>Команда</b>
+              <i>06</i><b>Команда</b>
             </button>
           )}
+          <div className="fix-sidebar__group">
+            <button
+              type="button"
+              className="fix-sidebar__group-toggle"
+              onClick={() => setDiscordOpen((value) => !value)}
+            >
+              <b>Discord · на паузе</b><i>{discordOpen ? "−" : "+"}</i>
+            </button>
+            {discordOpen && (
+              <>
+                <button
+                  className={section === "discord" ? "active" : ""}
+                  onClick={() => setSection("discord")}
+                >
+                  <i>D1</i><b>Discord</b><span>{data.discord.private_spaces}</span>
+                </button>
+                <button
+                  className={section === "discord-dispatch" ? "active" : ""}
+                  onClick={() => setSection("discord-dispatch")}
+                >
+                  <i>D2</i><b>Выдать ДЗ Discord</b>
+                </button>
+                <button
+                  className={section === "discord-students" ? "active" : ""}
+                  onClick={() => setSection("discord-students")}
+                >
+                  <i>D3</i><b>Discord ученики</b>
+                </button>
+                <button
+                  className={section === "discord-access" ? "active" : ""}
+                  onClick={() => setSection("discord-access")}
+                >
+                  <i>D4</i><b>Доступы</b>
+                </button>
+              </>
+            )}
+          </div>
         </nav>
         <div className="fix-sidebar__user">
           <span className="user-avatar">{initials(data.staff.display_name)}</span>

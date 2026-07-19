@@ -2940,6 +2940,11 @@ input[type="checkbox"] { accent-color: var(--fix-blue); }
 .fix-sidebar__nav button.active::before { content: ""; width: 3px; position: absolute; left: 18px; height: 24px; background: var(--fix-blue); border-radius: 0 3px 3px 0; }
 .fix-sidebar__nav button.active i { color: var(--fix-silver); }
 .fix-sidebar__nav button.active span { background: var(--fix-blue); }
+.fix-sidebar__group { display: grid; gap: 5px; margin-top: 18px; padding-top: 12px; border-top: 1px solid #2a2a2e; }
+.fix-sidebar__nav .fix-sidebar__group-toggle { color: #7a7a7c; background: transparent; border-color: transparent; }
+.fix-sidebar__nav .fix-sidebar__group-toggle b { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.fix-sidebar__nav .fix-sidebar__group-toggle i { margin-left: auto; font-size: 12px; }
+.fix-sidebar__nav .fix-sidebar__group-toggle:hover { color: #bcbcbd; background: #141416; transform: none; }
 .fix-sidebar__user { display: grid; grid-template-columns: 36px minmax(0, 1fr) 28px; align-items: center; gap: 10px; margin-top: auto; padding: 16px 8px 0; border-top: 1px solid var(--fix-divider); }
 .fix-sidebar__user .user-avatar { width: 36px; height: 36px; font-size: 10px; }
 .fix-sidebar__user > div { min-width: 0; display: grid; gap: 3px; }
