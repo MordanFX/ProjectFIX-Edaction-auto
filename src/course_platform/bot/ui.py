@@ -22,7 +22,10 @@ def stage_keyboard(
     is_reviewer: bool = False,
 ) -> dict[str, object]:
     if stage is StudentStage.COURSE_COMPLETED:
-        rows = [[{"text": "🏆 Итоги курса"}, {"text": "📚 База материалов"}]]
+        rows = [
+            [{"text": "🏆 Итоги курса"}, {"text": "📚 База материалов"}],
+            [{"text": "🎯 Pre session + Backtest"}],
+        ]
     elif stage is StudentStage.AWAITING_REVIEW:
         rows = [[{"text": "⏳ Статус ДЗ"}, {"text": "📘 Текущий урок"}]]
     elif stage is StudentStage.REVISION_REQUESTED:

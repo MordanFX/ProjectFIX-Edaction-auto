@@ -258,6 +258,21 @@ class MessageRouter:
             response = self._next_step_text(
                 await self._students.get_journey(message.sender.id)
             )
+        elif command == "/post_course":
+            journey = await self._students.get_journey(message.sender.id)
+            if journey is not None and journey.stage is StudentStage.COURSE_COMPLETED:
+                await self._api.send_message(
+                    message.chat.id,
+                    self._post_course_text(),
+                    parse_mode="HTML",
+                    reply_markup=self._post_course_reply_markup(),
+                )
+                return True
+            response = (
+                "🔒 <b>Pre session + Backtest</b>\n\n"
+                "Раздел откроется после завершения курса "
+                "и принятия всех домашних заданий."
+            )
         elif command == "/student_mode":
             journey = await self._students.get_journey(message.sender.id)
             response = (
@@ -1034,6 +1049,7 @@ class MessageRouter:
             "? помощь": "/help",
             "ℹ️ помощь": "/help",
             "📚 база материалов": "/lessons",
+            "🎯 pre session + backtest": "/post_course",
             "режим куратора": "/curator_mode",
         }
         if normalized_text in project_fix_commands:
@@ -1537,6 +1553,32 @@ class MessageRouter:
             )
         return "\n".join(lines)
 
+    _POST_COURSE_VIDEOS: tuple[tuple[str, str], ...] = (
+        ("▶ Pre session · Запись 1", "https://vimeo.com/1209755707"),
+        ("▶ Pre session · Запись 2", "https://vimeo.com/1210090244"),
+        ("📊 Backtest by Vlad · 08.07", "https://vimeo.com/1208160612"),
+    )
+
+    @staticmethod
+    def _post_course_text() -> str:
+        return (
+            "🎯 <b>PRE SESSION + BACKTEST</b>\n\n"
+            "▶ <b>Pre session</b>\n"
+            "Pre-session практикантов под присмотром менторов — тренируемся "
+            "и исправляем ошибки в составлении плана.\n\n"
+            "📊 <b>Backtest by Vlad · 08.07</b>\n"
+            "Участники практикума проводят backtest вместе с ментором."
+        )
+
+    @classmethod
+    def _post_course_reply_markup(cls) -> dict[str, object]:
+        return {
+            "inline_keyboard": [
+                [{"text": label, "url": vimeo_watch_url(url)}]
+                for label, url in cls._POST_COURSE_VIDEOS
+            ]
+        }
+
     @staticmethod
     def _next_step_text(journey: StudentJourney | None) -> str:
         if journey is None or journey.stage is StudentStage.NO_COURSE:
@@ -1551,9 +1593,9 @@ class MessageRouter:
             )
         return (
             "🚀 <b>КУРС ЗАВЕРШЁН — ЧТО ДАЛЬШЕ?</b>\n\n"
-            "Все обязательные уроки и задания завершены. Здесь можно будет "
-            "разместить сертификат, следующий продукт или персональную рекомендацию.\n\n"
-            "Пока следующий шаг уточняется — куратор свяжется с тобой отдельно."
+            "Все обязательные уроки и задания завершены.\n\n"
+            "Загляни в раздел «🎯 Pre session + Backtest» — совместные "
+            "тренировки и backtest с менторами практикума."
         )
 
     @classmethod

@@ -10,7 +10,7 @@ from course_platform.bot.api import TelegramBotClient
 from course_platform.bot.notifications import TelegramFeedbackDispatcher
 from course_platform.bot.router import MessageRouter
 from course_platform.bot.types import TelegramUpdate
-from course_platform.bot.ui import curator_keyboard
+from course_platform.bot.ui import curator_keyboard, stage_keyboard
 from course_platform.dev.seed_demo import seed_demo_data
 from course_platform.models import (
     Enrollment,
@@ -25,6 +25,7 @@ from course_platform.models import (
 )
 from course_platform.models.enums import (
     AttachmentKind,
+    EnrollmentStatus,
     FeedbackVerdict,
     SubmissionStatus,
     VideoSource,
@@ -34,7 +35,11 @@ from course_platform.services.learning import LearningService
 from course_platform.services.notifications import FeedbackNotificationService
 from course_platform.services.progression import ProgressionService
 from course_platform.services.reviews import ReviewService
-from course_platform.services.students import StudentRegistration, StudentService
+from course_platform.services.students import (
+    StudentRegistration,
+    StudentService,
+    StudentStage,
+)
 from course_platform.services.submissions import HomeworkAttachment, SubmissionService
 
 
@@ -1410,3 +1415,83 @@ async def test_journal_delivers_curator_feedback_attachments(
         and payload.get("message_id") == 42
         for method, payload in api_calls
     )
+
+
+def test_completed_stage_keyboard_offers_post_course_section() -> None:
+    labels = {
+        button["text"]
+        for row in stage_keyboard(StudentStage.COURSE_COMPLETED)["keyboard"]
+        for button in row
+    }
+    assert "🎯 Pre session + Backtest" in labels
+
+
+async def test_post_course_section_unlocks_after_completion(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+
+    api_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", maxsplit=1)[-1]
+        payload = json.loads(request.content)
+        api_calls.append((method, payload))
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": len(api_calls),
+                    "date": 1_700_000_003,
+                    "chat": {"id": 555, "type": "private"},
+                    "text": payload.get("text", ""),
+                },
+            },
+        )
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            SubmissionService(session_factory),
+            ReviewService(session_factory),
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+        )
+        # Курс не завершён — раздел закрыт.
+        await router.handle(message_update("🎯 Pre session + Backtest"))
+
+        async with session_factory() as session:
+            enrollment = await session.scalar(select(Enrollment))
+            assert enrollment is not None
+            enrollment.status = EnrollmentStatus.COMPLETED
+            await session.commit()
+
+        await router.handle(message_update("🎯 Pre session + Backtest"))
+
+    locked = [
+        payload
+        for method, payload in api_calls
+        if method == "sendMessage" and "Раздел откроется" in str(payload.get("text"))
+    ]
+    assert len(locked) == 1
+    opened = next(
+        payload
+        for method, payload in api_calls
+        if method == "sendMessage"
+        and "PRE SESSION + BACKTEST" in str(payload.get("text"))
+    )
+    urls = [
+        button["url"]
+        for row in opened["reply_markup"]["inline_keyboard"]
+        for button in row
+    ]
+    assert urls == [
+        "https://player.vimeo.com/video/1209755707",
+        "https://player.vimeo.com/video/1210090244",
+        "https://player.vimeo.com/video/1208160612",
+    ]
