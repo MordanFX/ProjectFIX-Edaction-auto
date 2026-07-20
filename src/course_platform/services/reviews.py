@@ -583,6 +583,7 @@ class ReviewService:
             state.verdict = verdict
             state.source_chat_id = source_chat_id
             state.source_message_id = source_message_id
+            state.question_id = None
 
             return PendingReviewFeedback(
                 submission_id=submission_id,
@@ -604,6 +605,7 @@ class ReviewService:
                     .where(
                         StaffUser.telegram_user_id == reviewer_telegram_user_id,
                         StaffUser.is_active.is_(True),
+                        StaffBotState.submission_id.is_not(None),
                     )
                 )
             ).one_or_none()

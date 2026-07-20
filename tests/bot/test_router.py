@@ -42,6 +42,7 @@ from course_platform.services.students import (
     StudentStage,
 )
 from course_platform.services.submissions import HomeworkAttachment, SubmissionService
+from course_platform.services.telegram_questions import TelegramQuestionService
 
 
 def message_update(
@@ -68,16 +69,16 @@ def message_update(
     )
 
 
-def photo_update() -> TelegramUpdate:
+def photo_update(*, sender_id: int = 555) -> TelegramUpdate:
     return TelegramUpdate.model_validate(
         {
             "update_id": 11,
             "message": {
                 "message_id": 4,
                 "date": 1_700_000_002,
-                "chat": {"id": 555, "type": "private"},
+                "chat": {"id": sender_id, "type": "private"},
                 "from": {
-                    "id": 555,
+                    "id": sender_id,
                     "is_bot": False,
                     "first_name": "Alex",
                 },
@@ -148,6 +149,29 @@ def review_callback_update(callback_data: str) -> TelegramUpdate:
                     "date": 1_700_000_006,
                     "chat": {"id": 555, "type": "private"},
                     "text": "Review card",
+                },
+                "data": callback_data,
+            },
+        }
+    )
+
+
+def curator_callback_update(callback_data: str, *, curator_id: int) -> TelegramUpdate:
+    return TelegramUpdate.model_validate(
+        {
+            "update_id": 14,
+            "callback_query": {
+                "id": "callback-2",
+                "from": {
+                    "id": curator_id,
+                    "is_bot": False,
+                    "first_name": "Curator",
+                },
+                "message": {
+                    "message_id": 21,
+                    "date": 1_700_000_007,
+                    "chat": {"id": curator_id, "type": "private"},
+                    "text": "Question card",
                 },
                 "data": callback_data,
             },
@@ -777,6 +801,100 @@ async def test_photo_while_awaiting_question_is_saved_as_question_not_homework(
     )
     assert any(
         method == "copyMessage" and payload.get("chat_id") == 777
+        for method, payload in api_calls
+    )
+
+
+async def test_curator_can_reply_to_question_with_photo(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).order_by(Lesson.position))
+        reviewer = await session.scalar(select(StaffUser))
+        assert lesson is not None
+        assert reviewer is not None
+        lesson_id = lesson.id
+        reviewer.telegram_user_id = 777
+        await session.commit()
+    await ProgressionService(session_factory).mark_current_viewed(555)
+
+    api_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", maxsplit=1)[-1]
+        payload = json.loads(request.content)
+        api_calls.append((method, payload))
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": len(api_calls),
+                    "date": 1_700_000_001,
+                    "chat": {"id": payload.get("chat_id", 555), "type": "private"},
+                    "text": payload.get("text", ""),
+                },
+            },
+        )
+
+    submissions = SubmissionService(session_factory)
+    questions = TelegramQuestionService(session_factory)
+
+    def build_router(api: TelegramBotClient) -> MessageRouter:
+        return MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            submissions,
+            ReviewService(session_factory),
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+            questions=questions,
+        )
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = build_router(api)
+        await router.handle(review_callback_update(f"ask_curator:{lesson_id}"))
+        await router.handle(message_update("What should I do here?"))
+
+    async with session_factory() as session:
+        question = await session.scalar(select(TelegramQuestion))
+    assert question is not None
+    question_id = question.id
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = build_router(api)
+        await router.handle(
+            curator_callback_update(f"answer_question:{question_id}", curator_id=777)
+        )
+        await router.handle(photo_update(sender_id=777))
+
+    async with session_factory() as session:
+        question = await session.get(TelegramQuestion, question_id)
+    assert question is not None
+    assert question.status == "resolved"
+    assert question.answer_text == "Photo result"
+
+    assert any(
+        method == "sendMessage"
+        and payload.get("chat_id") == 555
+        and "ОТВЕТ КУРАТОРА" in str(payload.get("text"))
+        and "Photo result" in str(payload.get("text"))
+        for method, payload in api_calls
+    )
+    assert any(
+        method == "copyMessage"
+        and payload.get("chat_id") == 555
+        and payload.get("from_chat_id") == 777
+        for method, payload in api_calls
+    )
+    assert any(
+        method == "sendMessage"
+        and payload.get("chat_id") == 777
+        and "ОТВЕТ ОТПРАВЛЕН" in str(payload.get("text"))
         for method, payload in api_calls
     )
 

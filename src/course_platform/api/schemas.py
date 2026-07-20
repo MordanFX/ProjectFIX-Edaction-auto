@@ -376,6 +376,7 @@ class TelegramQuestionResponse(APIModel):
     has_attachment: bool
     attachment_kind: AttachmentKind | None
     status: str
+    answer_text: str | None
     created_at: datetime
     resolved_at: datetime | None
     resolved_by: str | None

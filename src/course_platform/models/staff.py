@@ -14,7 +14,7 @@ from course_platform.models.mixins import PrimaryKeyMixin, TimestampMixin
 from course_platform.models.types import enum_values
 
 if TYPE_CHECKING:
-    from course_platform.models.submission import Feedback, Submission
+    from course_platform.models.submission import Feedback, Submission, TelegramQuestion
 
 
 class StaffUser(PrimaryKeyMixin, TimestampMixin, Base):
@@ -46,10 +46,10 @@ class StaffBotState(TimestampMixin, Base):
     staff_id: Mapped[UUID] = mapped_column(
         ForeignKey("staff_users.id", ondelete="CASCADE"), primary_key=True
     )
-    submission_id: Mapped[UUID] = mapped_column(
+    submission_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("submissions.id", ondelete="CASCADE"), index=True
     )
-    verdict: Mapped[FeedbackVerdict] = mapped_column(
+    verdict: Mapped[FeedbackVerdict | None] = mapped_column(
         Enum(
             FeedbackVerdict,
             name="feedback_verdict",
@@ -57,8 +57,12 @@ class StaffBotState(TimestampMixin, Base):
             values_callable=enum_values,
         )
     )
-    source_chat_id: Mapped[int] = mapped_column(BigInteger)
-    source_message_id: Mapped[int]
+    source_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    source_message_id: Mapped[int | None]
+    question_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("telegram_questions.id", ondelete="CASCADE"), index=True
+    )
 
     staff: Mapped[StaffUser] = relationship(back_populates="bot_state")
-    submission: Mapped[Submission] = relationship()
+    submission: Mapped[Submission | None] = relationship()
+    question: Mapped[TelegramQuestion | None] = relationship()

@@ -236,6 +236,7 @@ export interface TelegramQuestion {
   has_attachment: boolean;
   attachment_kind: AttachmentKind | null;
   status: "open" | "resolved";
+  answer_text: string | null;
   created_at: string;
   resolved_at: string | null;
   resolved_by: string | null;

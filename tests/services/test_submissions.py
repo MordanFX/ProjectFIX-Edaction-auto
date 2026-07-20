@@ -8,6 +8,7 @@ from course_platform.dev.seed_demo import seed_demo_data
 from course_platform.models import (
     Assignment,
     Lesson,
+    StaffBotState,
     StaffUser,
     StudentBotState,
     Submission,
@@ -31,7 +32,13 @@ from course_platform.services.submissions import (
     SubmissionService,
     UnsupportedSubmissionKindError,
 )
-from course_platform.services.telegram_questions import TelegramQuestionService
+from course_platform.services.telegram_questions import (
+    EmptyQuestionReplyError,
+    NoPendingQuestionReplyError,
+    TelegramQuestionAlreadyResolvedError,
+    TelegramQuestionService,
+    UnauthorizedQuestionReviewerError,
+)
 
 
 async def test_homework_is_locked_until_lesson_view_is_confirmed(
@@ -293,3 +300,97 @@ async def test_telegram_question_is_listed_and_resolved(
 
     still_open = await questions_service.list_questions(include_resolved=False)
     assert still_open == []
+
+
+async def ask_question(
+    session_factory: async_sessionmaker[AsyncSession],
+    submission_service: SubmissionService,
+    *,
+    telegram_user_id: int = 123,
+    text: str = "Need help",
+):
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).order_by(Lesson.position))
+    assert lesson is not None
+    await submission_service.begin_question(telegram_user_id, expected_lesson_id=lesson.id)
+    return await submission_service.submit_question_text(telegram_user_id, text)
+
+
+async def test_curator_can_reply_to_telegram_question(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    submission_service = await prepare_student(session_factory)
+    receipt = await ask_question(session_factory, submission_service)
+
+    async with session_factory() as session:
+        staff = StaffUser(login="curator", display_name="Curator", telegram_user_id=999)
+        session.add(staff)
+        await session.commit()
+        staff_id = staff.id
+
+    questions_service = TelegramQuestionService(session_factory)
+
+    with pytest.raises(UnauthorizedQuestionReviewerError):
+        await questions_service.begin_reply(
+            question_id=receipt.question_id,
+            reviewer_telegram_user_id=555555,
+        )
+
+    assert await questions_service.get_pending_reply(999) is None
+
+    prompt = await questions_service.begin_reply(
+        question_id=receipt.question_id,
+        reviewer_telegram_user_id=999,
+    )
+    assert prompt.question_id == receipt.question_id
+    assert prompt.lesson_position == 1
+
+    pending = await questions_service.get_pending_reply(999)
+    assert pending is not None
+    assert pending.question_id == receipt.question_id
+
+    with pytest.raises(EmptyQuestionReplyError):
+        await questions_service.complete_reply(reviewer_telegram_user_id=999, message="   ")
+
+    completion = await questions_service.complete_reply(
+        reviewer_telegram_user_id=999,
+        message="  Here is the answer  ",
+    )
+    assert completion.question_id == receipt.question_id
+    assert completion.student_telegram_user_id == 123
+    assert completion.message == "Here is the answer"
+
+    assert await questions_service.get_pending_reply(999) is None
+    async with session_factory() as session:
+        state = await session.get(StaffBotState, staff_id)
+        question = await session.get(TelegramQuestion, receipt.question_id)
+    assert state is None
+    assert question is not None
+    assert question.status == "resolved"
+    assert question.answer_text == "Here is the answer"
+    assert question.resolved_by_staff_id == staff_id
+
+    with pytest.raises(NoPendingQuestionReplyError):
+        await questions_service.complete_reply(reviewer_telegram_user_id=999, message="Late reply")
+
+
+async def test_cannot_reply_to_already_resolved_question(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    submission_service = await prepare_student(session_factory)
+    receipt = await ask_question(session_factory, submission_service)
+
+    async with session_factory() as session:
+        staff = StaffUser(login="curator2", display_name="Curator Two", telegram_user_id=888)
+        session.add(staff)
+        await session.commit()
+        staff_id = staff.id
+
+    questions_service = TelegramQuestionService(session_factory)
+    await questions_service.resolve_question(question_id=receipt.question_id, staff_id=staff_id)
+
+    with pytest.raises(TelegramQuestionAlreadyResolvedError):
+        await questions_service.begin_reply(
+            question_id=receipt.question_id,
+            reviewer_telegram_user_id=888,
+        )

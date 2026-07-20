@@ -232,6 +232,7 @@ class TelegramQuestion(PrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(
         String(16), default="open", server_default="open", index=True
     )
+    answer_text: Mapped[str | None] = mapped_column(Text)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_by_staff_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("staff_users.id", ondelete="SET NULL"), index=True

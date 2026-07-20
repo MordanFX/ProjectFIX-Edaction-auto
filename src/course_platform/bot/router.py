@@ -66,6 +66,14 @@ from course_platform.services.submissions import (
     SubmissionWorkflowError,
     UnsupportedSubmissionKindError,
 )
+from course_platform.services.telegram_questions import (
+    EmptyQuestionReplyError,
+    NoPendingQuestionReplyError,
+    TelegramQuestionAlreadyResolvedError,
+    TelegramQuestionNotFoundError,
+    TelegramQuestionService,
+    UnauthorizedQuestionReviewerError,
+)
 
 
 class MessageRouter:
@@ -82,6 +90,7 @@ class MessageRouter:
         dashboard: AdminDashboardService,
         access: StudentAccessService | None = None,
         vimeo: VimeoOEmbedClient | None = None,
+        questions: TelegramQuestionService | None = None,
     ) -> None:
         self._api = api
         self._students = students
@@ -92,6 +101,7 @@ class MessageRouter:
         self._dashboard = dashboard
         self._access = access
         self._vimeo = vimeo
+        self._questions = questions
         self._pending_video_lessons: dict[int, UUID] = {}
         self._grant_sessions: dict[int, dict[str, UUID]] = {}
         self._grant_selected_students: dict[int, UUID] = {}
@@ -112,6 +122,8 @@ class MessageRouter:
                 return await self._handle_submission_start_callback(update)
             if callback_data.startswith("ask_curator:"):
                 return await self._handle_ask_curator_callback(update)
+            if callback_data.startswith("answer_question:"):
+                return await self._handle_answer_question_callback(update)
             if callback_data.startswith("lesson:"):
                 return await self._handle_lesson_callback(update)
             if callback_data.startswith("settings:"):
@@ -151,6 +163,11 @@ class MessageRouter:
 
         command = self._extract_command(message.text) if message.text else ""
         pending_feedback = await self._reviews.get_pending_telegram_feedback(message.sender.id)
+        pending_question_reply = (
+            await self._questions.get_pending_reply(message.sender.id)
+            if self._questions is not None
+            else None
+        )
         reply_markup: dict[str, object] | None = None
         link_preview_options: dict[str, object] | None = None
         lesson_cover_url: str | None = None
@@ -175,8 +192,16 @@ class MessageRouter:
                 "✅ <b>Проверка отменена</b>\n\n"
                 "Работа осталась в очереди и доступна для повторного решения."
             )
+        elif pending_question_reply is not None and command == "/cancel_review":
+            await self._reviews.cancel_telegram_feedback(message.sender.id)
+            response = "✅ <b>Ответ отменён</b>\n\nВопрос остался открытым."
         elif pending_feedback is not None and not command.startswith("/"):
             response = await self._complete_review_feedback_from_message(
+                message.sender.id,
+                message,
+            )
+        elif pending_question_reply is not None and not command.startswith("/"):
+            response = await self._complete_question_reply_from_message(
                 message.sender.id,
                 message,
             )
@@ -1001,6 +1026,76 @@ class MessageRouter:
             reviewer_telegram_user_id,
             feedback_text,
             (attachment,) if attachment is not None else (),
+        )
+
+    async def _complete_question_reply(
+        self,
+        reviewer_telegram_user_id: int,
+        message_text: str,
+        attachment_source: tuple[int, int] | None,
+    ) -> str:
+        assert self._questions is not None
+        try:
+            completion = await self._questions.complete_reply(
+                reviewer_telegram_user_id=reviewer_telegram_user_id,
+                message=message_text,
+                has_attachment=attachment_source is not None,
+            )
+        except EmptyQuestionReplyError:
+            return "⚠️ Ответ пустой. Напиши текст или отправь фото/файл с пояснением."
+        except (NoPendingQuestionReplyError, TelegramQuestionNotFoundError):
+            return self._unknown_command_text()
+
+        if completion.student_telegram_user_id is not None:
+            lesson_line = (
+                f"📘 Урок {completion.lesson_position}: "
+                f"{escape(completion.lesson_title)}\n\n"
+                if completion.lesson_title
+                else ""
+            )
+            try:
+                await self._api.send_message(
+                    completion.student_telegram_user_id,
+                    "💬 <b>ОТВЕТ КУРАТОРА</b>\n\n"
+                    f"{lesson_line}"
+                    f"{escape(completion.message)}",
+                    parse_mode="HTML",
+                )
+                if attachment_source is not None:
+                    source_chat_id, source_message_id = attachment_source
+                    await self._api.copy_message(
+                        completion.student_telegram_user_id,
+                        source_chat_id,
+                        source_message_id,
+                    )
+            except (TelegramAPIError, TelegramTransportError):
+                pass
+
+        return (
+            "✅ <b>ОТВЕТ ОТПРАВЛЕН</b>\n\n"
+            f"Ученик {escape(completion.student_name)} получит его в Telegram. "
+            "Вопрос закрыт."
+        )
+
+    async def _complete_question_reply_from_message(
+        self,
+        reviewer_telegram_user_id: int,
+        message: TelegramMessage,
+    ) -> str:
+        has_attachment = (
+            message.document is not None
+            or message.photo
+            or message.video is not None
+            or message.video_note is not None
+        )
+        attachment_source = (
+            (message.chat.id, message.message_id) if has_attachment else None
+        )
+        reply_text = (message.text or message.caption or "").strip()
+        return await self._complete_question_reply(
+            reviewer_telegram_user_id,
+            reply_text,
+            attachment_source,
         )
 
     @staticmethod
@@ -2187,6 +2282,61 @@ class MessageRouter:
         )
         return True
 
+    async def _handle_answer_question_callback(self, update: TelegramUpdate) -> bool:
+        callback = update.callback_query
+        if callback is None or callback.message is None or not callback.data:
+            return False
+        if self._questions is None:
+            await self._api.answer_callback_query(callback.id, text="Недоступно", show_alert=True)
+            return True
+        try:
+            question_id = UUID(callback.data.split(":", maxsplit=1)[1])
+        except (IndexError, ValueError):
+            await self._api.answer_callback_query(callback.id, text="Вопрос не найден")
+            return True
+
+        try:
+            prompt = await self._questions.begin_reply(
+                question_id=question_id,
+                reviewer_telegram_user_id=callback.sender.id,
+            )
+        except UnauthorizedQuestionReviewerError:
+            await self._api.answer_callback_query(callback.id, text="Нет доступа", show_alert=True)
+            return True
+        except TelegramQuestionNotFoundError:
+            await self._api.answer_callback_query(
+                callback.id, text="Вопрос не найден", show_alert=True
+            )
+            return True
+        except TelegramQuestionAlreadyResolvedError:
+            await self._api.answer_callback_query(
+                callback.id, text="Вопрос уже закрыт", show_alert=True
+            )
+            return True
+
+        await self._api.answer_callback_query(callback.id, text="Теперь напиши ответ")
+        lesson_line = (
+            f"📘 Урок {prompt.lesson_position}: {escape(prompt.lesson_title)}\n\n"
+            if prompt.lesson_title
+            else ""
+        )
+        await self._api.send_message(
+            callback.message.chat.id,
+            "💬 <b>ОТВЕТ УЧЕНИКУ</b>\n\n"
+            f"👤 {escape(prompt.student_name)}\n"
+            f"{lesson_line}"
+            "Напиши ответ текстом или отправь фото/файл с подписью. "
+            "Он уйдёт ученику и закроет вопрос.\n\n"
+            "Отмена: /cancel_review",
+            parse_mode="HTML",
+            reply_markup={
+                "force_reply": True,
+                "input_field_placeholder": "Ответ ученику",
+                "selective": True,
+            },
+        )
+        return True
+
     async def _handle_submission_template_callback(self, update: TelegramUpdate) -> bool:
         callback = update.callback_query
         if callback is None or not callback.data:
@@ -2486,7 +2636,16 @@ class MessageRouter:
                     curator_id,
                     text,
                     parse_mode="HTML",
-                    reply_markup=curator_keyboard(),
+                    reply_markup={
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": "💬 Ответить",
+                                    "callback_data": f"answer_question:{question.question_id}",
+                                }
+                            ]
+                        ]
+                    },
                 )
                 if has_attachment:
                     await self._api.copy_message(

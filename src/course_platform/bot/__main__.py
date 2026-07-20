@@ -22,6 +22,7 @@ from course_platform.services.reminders import LessonReminderService
 from course_platform.services.reviews import ReviewService
 from course_platform.services.students import StudentAccessService, StudentService
 from course_platform.services.submissions import SubmissionService
+from course_platform.services.telegram_questions import TelegramQuestionService
 
 
 def configure_logging(level: str) -> None:
@@ -58,6 +59,7 @@ async def run_bot() -> None:
                 AdminDashboardService(session_factory),
                 StudentAccessService(session_factory),
                 vimeo,
+                TelegramQuestionService(session_factory),
             )
             feedback_dispatcher = TelegramFeedbackDispatcher(
                 api,

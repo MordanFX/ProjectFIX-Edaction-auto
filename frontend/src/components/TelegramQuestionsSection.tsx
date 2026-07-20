@@ -103,7 +103,10 @@ function QuestionRow({ question, onResolve }: {
           <p>{question.text_body || (question.has_attachment ? "Без текста, смотри вложение." : "Пустой вопрос.")}</p>
           {attachmentError && <em>{attachmentError}</em>}
           {question.status === "resolved" && (
-            <em>Закрыто: {question.resolved_by || "куратор"}{question.resolved_at ? ` · ${formatShortDate(question.resolved_at)}` : ""}</em>
+            <>
+              {question.answer_text && <p className="telegram-question-answer">↳ {question.answer_text}</p>}
+              <em>Закрыто: {question.resolved_by || "куратор"}{question.resolved_at ? ` · ${formatShortDate(question.resolved_at)}` : ""}</em>
+            </>
           )}
         </div>
       </div>

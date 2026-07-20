@@ -522,6 +522,7 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .discord-question-list__main small { color: #8395aa; font-size: 9px; }
 .discord-question-list__main p { max-width: 720px; margin: 3px 0 0; overflow: hidden; color: #c4d0dd; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .discord-question-list__main em { color: #8ab79f; font-size: 9px; font-style: normal; }
+.telegram-question-answer { color: #8ab79f !important; }
 .discord-question-list__actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
 .discord-question-list__actions a, .discord-question-list__actions button { padding: 8px 10px; color: #d7e0ea; background: #172538; border: 1px solid #30435a; border-radius: 7px; font-size: 10px; font-weight: 650; text-decoration: none; white-space: nowrap; }
 .discord-question-list__actions button { color: #bcebd6; background: #194339; border-color: #286b56; }
