@@ -440,6 +440,8 @@ class StudentOverviewResponse(APIModel):
     accepted_submissions: int
     total_assignments: int
     progress_percent: int
+    assigned_curator_id: UUID | None
+    assigned_curator_name: str | None
 
     @classmethod
     def from_domain(cls, item: StudentOverview) -> "StudentOverviewResponse":
@@ -685,6 +687,10 @@ class DiscordCourseAssignmentRequest(APIModel):
 
 class StudentAccessUpdateResponse(StudentDetailResponse):
     pass
+
+
+class StudentCuratorAssignRequest(APIModel):
+    curator_id: UUID | None
 
 
 class CourseUpdateRequest(APIModel):

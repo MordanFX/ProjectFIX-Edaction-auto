@@ -91,6 +91,9 @@ function StudentCard({
         </div>
         <EnrollmentStatus status={student.enrollment_status} />
       </header>
+      {student.assigned_curator_id && (
+        <span className="curator-pin curator-pin--assigned">Куратор: {student.assigned_curator_name}</span>
+      )}
       <div className="student-course">
         <small>Текущий курс</small>
         <strong>{student.course_title ?? "Курс пока не назначен"}</strong>

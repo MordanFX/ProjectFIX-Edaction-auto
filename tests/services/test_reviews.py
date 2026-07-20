@@ -12,19 +12,23 @@ from course_platform.models import (
     Feedback,
     FeedbackAttachment,
     StaffUser,
+    Student,
     Submission,
 )
 from course_platform.models.enums import (
     AttachmentKind,
     EnrollmentStatus,
     FeedbackVerdict,
+    StaffRole,
     SubmissionStatus,
 )
+from course_platform.services.access_scope import StaffScope
 from course_platform.services.progression import ProgressionService
 from course_platform.services.reviews import (
     FeedbackAttachmentInput,
     ReviewService,
     SubmissionAlreadyReviewedError,
+    SubmissionNotFoundError,
     UnauthorizedReviewerError,
 )
 from course_platform.services.students import StudentRegistration, StudentService
@@ -272,3 +276,49 @@ async def test_only_active_staff_can_review_and_decision_is_final(
             verdict=FeedbackVerdict.ACCEPTED,
             message="Second decision",
         )
+
+
+async def test_student_pinned_to_curator_is_hidden_from_other_curators(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    submission_id = await prepare_pending_submission(session_factory)
+    reviews = ReviewService(session_factory)
+
+    async with session_factory() as session:
+        curator_a = await session.scalar(
+            select(StaffUser).where(StaffUser.telegram_user_id == 222)
+        )
+        assert curator_a is not None
+        curator_b = StaffUser(login="curator-b", display_name="Curator B")
+        admin = StaffUser(login="admin", display_name="Admin", role=StaffRole.ADMIN)
+        session.add_all([curator_b, admin])
+        await session.flush()
+        student = await session.scalar(select(Student))
+        assert student is not None
+        student.assigned_curator_id = curator_b.id
+        await session.commit()
+        curator_a_id = curator_a.id
+        curator_b_id = curator_b.id
+        admin_id = admin.id
+
+    scope_a = StaffScope(staff_id=curator_a_id, is_admin=False)
+    scope_b = StaffScope(staff_id=curator_b_id, is_admin=False)
+    scope_admin = StaffScope(staff_id=admin_id, is_admin=True)
+
+    assert await reviews.list_pending(viewer=scope_a) == []
+    queue_b = await reviews.list_pending(viewer=scope_b)
+    assert [item.submission_id for item in queue_b] == [submission_id]
+    queue_admin = await reviews.list_pending(viewer=scope_admin)
+    assert [item.submission_id for item in queue_admin] == [submission_id]
+
+    with pytest.raises(SubmissionNotFoundError):
+        await reviews.get_detail(submission_id, viewer=scope_a)
+    detail_b = await reviews.get_detail(submission_id, viewer=scope_b)
+    assert detail_b.submission_id == submission_id
+
+    with pytest.raises(SubmissionNotFoundError):
+        await reviews.assign_to_reviewer(submission_id=submission_id, reviewer_id=curator_a_id)
+    claimed = await reviews.assign_to_reviewer(
+        submission_id=submission_id, reviewer_id=curator_b_id
+    )
+    assert claimed.assigned_reviewer_id == curator_b_id

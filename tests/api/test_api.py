@@ -99,6 +99,19 @@ async def login(client: httpx.AsyncClient) -> str:
     return response.json()["access_token"]
 
 
+async def token_for(
+    client: httpx.AsyncClient,
+    login_value: str,
+    password: str = "correct-password",
+) -> str:
+    response = await client.post(
+        "/api/auth/token",
+        data={"username": login_value, "password": password},
+    )
+    assert response.status_code == 200
+    return response.json()["access_token"]
+
+
 async def test_health_is_public(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -153,6 +166,60 @@ async def test_curator_cannot_delete_telegram_student(
         )
 
     assert response.status_code == 403
+
+
+async def test_curator_cannot_assign_student_curator(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await create_staff(session_factory)
+    registered = await StudentService(session_factory).register(
+        StudentRegistration(telegram_user_id=779, first_name="Retest")
+    )
+
+    async with build_client(session_factory) as client:
+        token = await login(client)
+        response = await client.patch(
+            f"/api/students/{registered.student_id}/curator",
+            json={"curator_id": None},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 403
+
+
+async def test_admin_assigns_curator_and_scopes_student_visibility(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await create_staff(session_factory, login="admin-user", role=StaffRole.ADMIN)
+    await create_staff(session_factory, login="curator-a", display_name="Curator A")
+    curator_b = await create_staff(
+        session_factory, login="curator-b", display_name="Curator B"
+    )
+    registered = await StudentService(session_factory).register(
+        StudentRegistration(telegram_user_id=780, first_name="Pinned")
+    )
+
+    async with build_client(session_factory) as client:
+        admin_token = await token_for(client, "admin-user")
+        assign = await client.patch(
+            f"/api/students/{registered.student_id}/curator",
+            json={"curator_id": str(curator_b.id)},
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+
+        curator_a_token = await token_for(client, "curator-a")
+        curator_b_token = await token_for(client, "curator-b")
+        list_a = await client.get(
+            "/api/students", headers={"Authorization": f"Bearer {curator_a_token}"}
+        )
+        list_b = await client.get(
+            "/api/students", headers={"Authorization": f"Bearer {curator_b_token}"}
+        )
+
+    assert assign.status_code == 200
+    assert assign.json()["assigned_curator_name"] == "Curator B"
+    assert list_a.json() == []
+    assert [item["student_id"] for item in list_b.json()] == [str(registered.student_id)]
 
 
 async def test_discord_overview_requires_auth_and_returns_linked_space(

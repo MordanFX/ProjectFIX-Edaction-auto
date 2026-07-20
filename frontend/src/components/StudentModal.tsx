@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 
 import {
   APIError,
+  assignStudentCurator,
   deleteTelegramStudent,
   getCourseCohorts,
+  getStaffMembers,
   getStudentDetail,
   getStudentLessonDetail,
   updateStudentAccess,
@@ -11,6 +13,8 @@ import {
 import type {
   CohortOption,
   CourseOverview,
+  Staff,
+  StaffMember,
   StudentAccessUpdate,
   StudentDetail,
   StudentLessonDetail,
@@ -22,6 +26,7 @@ import { VimeoPreview } from "./VimeoPreview";
 interface StudentModalProps {
   overview: StudentOverview;
   courses: CourseOverview[];
+  staff: Staff;
   onClose: () => void;
   onChanged: () => Promise<void>;
 }
@@ -38,10 +43,15 @@ type StudentTab = "overview" | "lessons" | "homework" | "settings";
 export function StudentModal({
   overview,
   courses,
+  staff,
   onClose,
   onChanged,
 }: StudentModalProps) {
+  const isAdmin = staff.role === "admin";
   const [detail, setDetail] = useState<StudentDetail | null>(null);
+  const [curators, setCurators] = useState<StaffMember[]>([]);
+  const [curatorSaving, setCuratorSaving] = useState(false);
+  const [curatorError, setCuratorError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedCourseId, setSelectedCourseId] = useState(overview.course_id ?? "");
   const [cohorts, setCohorts] = useState<CohortOption[]>([]);
@@ -66,6 +76,13 @@ export function StudentModal({
   useEffect(() => {
     void loadDetail();
   }, [overview.student_id, overview.enrollment_id]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    getStaffMembers()
+      .then(setCurators)
+      .catch(() => setCurators([]));
+  }, [isAdmin]);
 
   useEffect(() => {
     const courseId = detail?.course_id ?? selectedCourseId;
@@ -183,6 +200,24 @@ export function StudentModal({
     }
   }
 
+  async function assignCurator(curatorId: string | null) {
+    setCuratorSaving(true);
+    setCuratorError(null);
+    try {
+      const updated = await assignStudentCurator(overview.student_id, curatorId);
+      setDetail(updated);
+      await onChanged();
+    } catch (caughtError) {
+      setCuratorError(
+        caughtError instanceof APIError
+          ? caughtError.message
+          : "Не удалось закрепить куратора",
+      );
+    } finally {
+      setCuratorSaving(false);
+    }
+  }
+
   const student = detail ?? overview;
 
   return (
@@ -211,6 +246,9 @@ export function StudentModal({
                 <h2>{student.name}</h2>
                 <p>{student.username ? `@${student.username}` : "без username"}</p>
               </div>
+              <span className={`curator-pin ${detail.assigned_curator_id ? "curator-pin--assigned" : ""}`}>
+                {detail.assigned_curator_id ? `Куратор: ${detail.assigned_curator_name}` : "Не закреплён"}
+              </span>
               <EnrollmentStatus status={detail.enrollment_status} />
             </header>
 
@@ -373,6 +411,15 @@ export function StudentModal({
                   <Fact label="Последняя активность" value={formatDate(detail.last_activity_at)} />
                   <Fact label="Часовой пояс" value={detail.timezone} />
                 </section>
+                {isAdmin && (
+                  <CuratorSection
+                    detail={detail}
+                    curators={curators}
+                    saving={curatorSaving}
+                    error={curatorError}
+                    onAssign={(curatorId) => void assignCurator(curatorId)}
+                  />
+                )}
                 <AccessSection
                   detail={detail}
                   courses={courses}
@@ -398,6 +445,53 @@ export function StudentModal({
         )}
       </section>
     </div>
+  );
+}
+
+function CuratorSection({
+  detail,
+  curators,
+  saving,
+  error,
+  onAssign,
+}: {
+  detail: StudentDetail;
+  curators: StaffMember[];
+  saving: boolean;
+  error: string | null;
+  onAssign: (curatorId: string | null) => void;
+}) {
+  return (
+    <section className="student-detail__section">
+      <div className="student-detail__section-heading">
+        <div>
+          <span>Доступ куратора</span>
+          <h3>Закрепление ученика</h3>
+        </div>
+      </div>
+      <p className="muted">
+        Если ученик закреплён за куратором, остальные кураторы не видят его вопросы,
+        ДЗ и карточку — только вы и закреплённый куратор.
+      </p>
+      <div className="student-access-form">
+        <label>
+          <span>Куратор</span>
+          <select
+            value={detail.assigned_curator_id ?? ""}
+            disabled={saving}
+            onChange={(event) => onAssign(event.target.value || null)}
+          >
+            <option value="">Не закреплён (общая очередь)</option>
+            {curators.map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.display_name} · {member.role === "admin" ? "admin" : "куратор"}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {error && <div className="form-error">{error}</div>}
+    </section>
   );
 }
 

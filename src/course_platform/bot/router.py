@@ -713,7 +713,12 @@ class MessageRouter:
         return f"📝 <b>ДОМАШНЕЕ ЗАДАНИЕ</b>\n\n{instructions}\n\n<i>{hint}</i>"
 
     async def _send_review_queue(self, message: TelegramMessage) -> None:
-        if message.sender is None or not await self._reviews.is_reviewer(message.sender.id):
+        scope = (
+            await self._reviews.get_staff_scope(message.sender.id)
+            if message.sender is not None
+            else None
+        )
+        if scope is None:
             await self._api.send_message(
                 message.chat.id,
                 "⛔ <b>Нет доступа к проверке работ.</b>",
@@ -722,7 +727,7 @@ class MessageRouter:
             )
             return
 
-        queue = await self._reviews.list_pending(source=SubmissionSource.TELEGRAM)
+        queue = await self._reviews.list_pending(viewer=scope, source=SubmissionSource.TELEGRAM)
         if not queue:
             await self._api.send_message(
                 message.chat.id,
@@ -858,7 +863,12 @@ class MessageRouter:
                 )
 
     async def _send_review_history(self, message: TelegramMessage) -> None:
-        if message.sender is None or not await self._reviews.is_reviewer(message.sender.id):
+        scope = (
+            await self._reviews.get_staff_scope(message.sender.id)
+            if message.sender is not None
+            else None
+        )
+        if scope is None:
             await self._api.send_message(
                 message.chat.id,
                 "⛔ <b>Нет доступа к истории проверок.</b>",
@@ -870,6 +880,7 @@ class MessageRouter:
         reviewed = [
             item
             for item in await self._reviews.list_pending(
+                viewer=scope,
                 include_reviewed=True,
                 limit=50,
                 source=SubmissionSource.TELEGRAM,
@@ -1193,9 +1204,10 @@ class MessageRouter:
         )
 
     async def _curator_summary(self, telegram_user_id: int) -> str:
-        if not await self._reviews.is_reviewer(telegram_user_id):
+        scope = await self._reviews.get_staff_scope(telegram_user_id)
+        if scope is None:
             return "⛔ <b>Нет доступа к сводке куратора.</b>"
-        summary = await self._dashboard.summary()
+        summary = await self._dashboard.summary(viewer=scope)
         return (
             "📊 <b>СВОДКА КУРАТОРА</b>\n\n"
             f"📥 Ожидают проверки: <b>{summary.pending_reviews}</b>\n"
@@ -1206,9 +1218,10 @@ class MessageRouter:
         )
 
     async def _curator_students(self, telegram_user_id: int) -> str:
-        if not await self._reviews.is_reviewer(telegram_user_id):
+        scope = await self._reviews.get_staff_scope(telegram_user_id)
+        if scope is None:
             return "⛔ <b>Нет доступа к списку учеников.</b>"
-        students = await self._dashboard.list_students()
+        students = await self._dashboard.list_students(viewer=scope)
         if not students:
             return "👥 <b>Учеников пока нет.</b>"
         lines = ["👥 <b>УЧЕНИКИ</b>", ""]

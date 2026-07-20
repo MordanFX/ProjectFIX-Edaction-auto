@@ -30,7 +30,14 @@ from course_platform.api.security import (
     decode_attachment_media_token,
 )
 from course_platform.bot.api import TelegramAPIError, TelegramBotClient, TelegramTransportError
-from course_platform.models.enums import AttachmentKind, FeedbackVerdict, SubmissionSource
+from course_platform.models.enums import (
+    AttachmentKind,
+    FeedbackVerdict,
+    StaffRole,
+    SubmissionSource,
+)
+from course_platform.models.staff import StaffUser
+from course_platform.services.access_scope import StaffScope
 from course_platform.services.reviews import (
     AttachmentNotFoundError,
     EmptyFeedbackError,
@@ -46,14 +53,19 @@ PLAYBACK_TOKEN_TTL_SECONDS = 1800
 MAX_FEEDBACK_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
+def _scope(staff: StaffUser) -> StaffScope:
+    return StaffScope(staff_id=staff.id, is_admin=staff.role is StaffRole.ADMIN)
+
+
 @router.get("", response_model=list[ReviewQueueItemResponse])
 async def review_queue(
     staff: CurrentStaffDependency,
     reviews: ReviewServiceDependency,
     source: SubmissionSource | None = None,
 ) -> list[ReviewQueueItemResponse]:
-    del staff
-    items = await reviews.list_pending(include_reviewed=True, source=source)
+    items = await reviews.list_pending(
+        viewer=_scope(staff), include_reviewed=True, source=source
+    )
     return [ReviewQueueItemResponse.from_domain(item) for item in items]
 
 
@@ -132,9 +144,8 @@ async def review_detail(
     staff: CurrentStaffDependency,
     reviews: ReviewServiceDependency,
 ) -> ReviewDetailResponse:
-    del staff
     try:
-        item = await reviews.get_detail(submission_id)
+        item = await reviews.get_detail(submission_id, viewer=_scope(staff))
     except SubmissionNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

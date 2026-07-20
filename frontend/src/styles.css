@@ -1237,6 +1237,9 @@ body {
 .student-detail__eyebrow, .student-detail__section-heading span { color: #58aef6; font-size: 11px; font-weight: 850; letter-spacing: 0.14em; text-transform: uppercase; }
 .student-detail__hero h2 { margin: 5px 0 3px; color: #f5f8fc; font-size: 27px; letter-spacing: -0.035em; }
 .student-detail__hero p { margin: 0; color: #8293a8; font-size: 14px; }
+.curator-pin { padding: 6px 10px; color: #8fa2b6; background: #101f31; border: 1px solid #283c54; border-radius: 8px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.curator-pin--assigned { color: #bcebd6; background: #194339; border-color: #286b56; }
+.student-card .curator-pin { display: inline-block; margin: 10px 0 0; }
 .student-detail__tabs { position: sticky; z-index: 2; top: 0; display: flex; gap: 8px; padding: 14px 32px; background: rgb(9 21 35 / 88%); border-bottom: 1px solid #26374e; backdrop-filter: blur(16px); }
 .student-detail__tabs button { min-height: 38px; padding: 0 16px; color: #8fa2b6; background: #101f31; border: 1px solid #283c54; border-radius: 10px; font-size: 13px; font-weight: 850; transition: transform .16s ease, color .16s ease, background .16s ease, border-color .16s ease; }
 .student-detail__tabs button:hover { color: #edf6ff; border-color: #3c6892; transform: translateY(-1px); }

@@ -10,6 +10,7 @@ from course_platform.models import (
     Lesson,
     StaffBotState,
     StaffUser,
+    Student,
     StudentBotState,
     Submission,
     SubmissionAttachment,
@@ -394,3 +395,42 @@ async def test_cannot_reply_to_already_resolved_question(
             question_id=receipt.question_id,
             reviewer_telegram_user_id=888,
         )
+
+
+async def test_question_notifies_only_the_assigned_curator(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = await prepare_student(session_factory)
+    async with session_factory() as session:
+        other_curator = StaffUser(
+            login="other-curator", display_name="Other", telegram_user_id=444
+        )
+        pinned_curator = StaffUser(
+            login="pinned-curator", display_name="Pinned", telegram_user_id=555
+        )
+        session.add_all([other_curator, pinned_curator])
+        await session.flush()
+        student = await session.scalar(select(Student).where(Student.telegram_user_id == 123))
+        assert student is not None
+        student.assigned_curator_id = pinned_curator.id
+        await session.commit()
+
+    receipt = await ask_question(session_factory, service, text="Only for my curator")
+    assert receipt.curator_telegram_user_ids == (555,)
+
+
+async def test_unassigned_student_question_notifies_all_active_curators(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = await prepare_student(session_factory)
+    async with session_factory() as session:
+        session.add_all(
+            [
+                StaffUser(login="curator-x", display_name="X", telegram_user_id=666),
+                StaffUser(login="curator-y", display_name="Y", telegram_user_id=777),
+            ]
+        )
+        await session.commit()
+
+    receipt = await ask_question(session_factory, service, text="For anyone")
+    assert {666, 777}.issubset(receipt.curator_telegram_user_ids)

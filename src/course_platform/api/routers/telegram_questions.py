@@ -23,6 +23,9 @@ from course_platform.api.security import (
     decode_attachment_media_token,
 )
 from course_platform.bot.api import TelegramAPIError, TelegramBotClient, TelegramTransportError
+from course_platform.models.enums import StaffRole
+from course_platform.models.staff import StaffUser
+from course_platform.services.access_scope import StaffScope
 from course_platform.services.telegram_questions import (
     TelegramQuestionAttachmentNotFoundError,
     TelegramQuestionNotFoundError,
@@ -32,16 +35,21 @@ router = APIRouter(prefix="/telegram-questions", tags=["telegram-questions"])
 PLAYBACK_TOKEN_TTL_SECONDS = 1800
 
 
+def _scope(staff: StaffUser) -> StaffScope:
+    return StaffScope(staff_id=staff.id, is_admin=staff.role is StaffRole.ADMIN)
+
+
 @router.get("", response_model=list[TelegramQuestionResponse])
 async def telegram_questions(
     staff: CurrentStaffDependency,
     questions: TelegramQuestionServiceDependency,
     include_resolved: bool = True,
 ) -> list[TelegramQuestionResponse]:
-    del staff
     return [
         TelegramQuestionResponse.from_domain(item)
-        for item in await questions.list_questions(include_resolved=include_resolved)
+        for item in await questions.list_questions(
+            include_resolved=include_resolved, viewer=_scope(staff)
+        )
     ]
 
 
@@ -52,7 +60,9 @@ async def resolve_telegram_question(
     questions: TelegramQuestionServiceDependency,
 ) -> TelegramQuestionResponse:
     try:
-        item = await questions.resolve_question(question_id=question_id, staff_id=staff.id)
+        item = await questions.resolve_question(
+            question_id=question_id, staff_id=staff.id, viewer=_scope(staff)
+        )
     except TelegramQuestionNotFoundError:
         raise HTTPException(status_code=404, detail="telegram-question-not-found") from None
     return TelegramQuestionResponse.from_domain(item)

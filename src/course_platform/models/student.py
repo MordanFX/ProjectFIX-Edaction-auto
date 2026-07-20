@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from course_platform.models.course import Assignment, Cohort
     from course_platform.models.progress import LessonProgress
     from course_platform.models.reminder import LessonReminder
+    from course_platform.models.staff import StaffUser
     from course_platform.models.submission import Submission
 
 
@@ -68,6 +69,9 @@ class Student(PrimaryKeyMixin, TimestampMixin, Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    assigned_curator_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("staff_users.id", ondelete="SET NULL"), index=True
+    )
 
     enrollments: Mapped[list[Enrollment]] = relationship(
         back_populates="student", cascade="all, delete-orphan"
@@ -77,6 +81,7 @@ class Student(PrimaryKeyMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         single_parent=True,
     )
+    assigned_curator: Mapped[StaffUser | None] = relationship()
 
 
 class Enrollment(PrimaryKeyMixin, TimestampMixin, Base):

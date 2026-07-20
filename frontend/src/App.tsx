@@ -355,6 +355,7 @@ export function App() {
         <StudentModal
           overview={selectedStudent}
           courses={data.courses.filter((course) => course.audience === "telegram")}
+          staff={data.staff}
           onClose={() => setSelectedStudent(null)}
           onChanged={handleRefresh}
         />

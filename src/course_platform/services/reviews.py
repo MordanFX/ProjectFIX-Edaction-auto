@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
@@ -25,9 +25,11 @@ from course_platform.models import (
 from course_platform.models.enums import (
     AttachmentKind,
     FeedbackVerdict,
+    StaffRole,
     SubmissionSource,
     SubmissionStatus,
 )
+from course_platform.services.access_scope import StaffScope
 from course_platform.services.progression import ProgressionService
 
 
@@ -261,9 +263,22 @@ class ReviewService:
             )
             return reviewer_id is not None
 
+    async def get_staff_scope(self, telegram_user_id: int) -> StaffScope | None:
+        async with self._session_factory() as session:
+            reviewer = await session.scalar(
+                select(StaffUser).where(
+                    StaffUser.telegram_user_id == telegram_user_id,
+                    StaffUser.is_active.is_(True),
+                )
+            )
+            if reviewer is None:
+                return None
+            return StaffScope(staff_id=reviewer.id, is_admin=reviewer.role is StaffRole.ADMIN)
+
     async def list_pending(
         self,
         *,
+        viewer: StaffScope | None = None,
         limit: int = 50,
         include_reviewed: bool = False,
         source: SubmissionSource | None = None,
@@ -347,6 +362,13 @@ class ReviewService:
             )
             if source is not None:
                 query = query.where(Submission.source == source)
+            if viewer is not None and not viewer.is_admin:
+                query = query.where(
+                    or_(
+                        Student.assigned_curator_id.is_(None),
+                        Student.assigned_curator_id == viewer.staff_id,
+                    )
+                )
             rows = await session.execute(query)
 
             return [
@@ -384,6 +406,9 @@ class ReviewService:
         reviewer_id: UUID,
     ) -> ReviewQueueItem:
         async with session_scope(self._session_factory) as session:
+            reviewer = await session.get(StaffUser, reviewer_id)
+            if reviewer is None:
+                raise UnauthorizedReviewerError
             submission = await session.get(Submission, submission_id, with_for_update=True)
             if submission is None:
                 raise SubmissionNotFoundError
@@ -394,6 +419,18 @@ class ReviewService:
                 and submission.assigned_reviewer_id != reviewer_id
             ):
                 raise SubmissionAlreadyAssignedError
+            if reviewer.role is not StaffRole.ADMIN:
+                enrollment = await session.get(Enrollment, submission.enrollment_id)
+                student = (
+                    await session.get(Student, enrollment.student_id)
+                    if enrollment is not None
+                    else None
+                )
+                if student is not None and student.assigned_curator_id not in (
+                    None,
+                    reviewer_id,
+                ):
+                    raise SubmissionNotFoundError
             submission.status = SubmissionStatus.IN_REVIEW
             submission.assigned_reviewer_id = reviewer_id
             submission.assigned_at = datetime.now(UTC)
@@ -659,7 +696,12 @@ class ReviewService:
             source_message_id=pending.source_message_id,
         )
 
-    async def get_detail(self, submission_id: UUID) -> ReviewDetail:
+    async def get_detail(
+        self,
+        submission_id: UUID,
+        *,
+        viewer: StaffScope | None = None,
+    ) -> ReviewDetail:
         attachment_count = (
             select(func.count(SubmissionAttachment.id))
             .where(SubmissionAttachment.submission_id == Submission.id)
@@ -702,6 +744,7 @@ class ReviewService:
                         Student.first_name,
                         Student.last_name,
                         Student.username,
+                        Student.assigned_curator_id,
                         Course.title.label("course_title"),
                         Lesson.position,
                         Lesson.title.label("lesson_title"),
@@ -741,6 +784,12 @@ class ReviewService:
                 )
             ).one_or_none()
             if row is None:
+                raise SubmissionNotFoundError
+            if (
+                viewer is not None
+                and not viewer.is_admin
+                and row.assigned_curator_id not in (None, viewer.staff_id)
+            ):
                 raise SubmissionNotFoundError
 
             attachments = (
@@ -1022,6 +1071,11 @@ class ReviewService:
                 raise SubmissionNotFoundError
 
             submission, enrollment, lesson, course, student = row
+            if reviewer.role is not StaffRole.ADMIN and student.assigned_curator_id not in (
+                None,
+                reviewer_id,
+            ):
+                raise SubmissionNotFoundError
             if submission.status not in {
                 SubmissionStatus.SUBMITTED,
                 SubmissionStatus.IN_REVIEW,

@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import distinct, func, select
+from sqlalchemy import distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
+from course_platform.db.session import session_scope
 from course_platform.models import (
     Assignment,
     Cohort,
@@ -37,6 +39,7 @@ from course_platform.models.enums import (
     UnlockRule,
     VideoSource,
 )
+from course_platform.services.access_scope import StaffScope
 from course_platform.services.reviews import ReviewAttachment, _review_attachment
 
 
@@ -45,6 +48,10 @@ class StudentNotFoundError(RuntimeError):
 
 
 class StudentLessonNotFoundError(RuntimeError):
+    pass
+
+
+class CuratorNotFoundError(RuntimeError):
     pass
 
 
@@ -75,6 +82,8 @@ class StudentOverview:
     accepted_submissions: int
     total_assignments: int
     progress_percent: int
+    assigned_curator_id: UUID | None
+    assigned_curator_name: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +198,7 @@ class AdminDashboardService:
         student_id: UUID,
         enrollment_id: UUID,
         lesson_id: UUID,
+        viewer: StaffScope | None = None,
     ) -> StudentLessonDetail:
         async with self._session_factory() as session:
             row = (
@@ -214,6 +224,12 @@ class AdminDashboardService:
                 raise StudentLessonNotFoundError
 
             student, enrollment, lesson, progress, assignment = row
+            if (
+                viewer is not None
+                and not viewer.is_admin
+                and student.assigned_curator_id not in (None, viewer.staff_id)
+            ):
+                raise StudentLessonNotFoundError
             fallback_status = (
                 LessonProgressStatus.COMPLETED
                 if lesson.position < enrollment.current_lesson_position
@@ -291,22 +307,33 @@ class AdminDashboardService:
                 attempts=tuple(attempts),
             )
 
-    async def summary(self) -> DashboardSummary:
-        students = await self.list_students()
+    async def summary(self, *, viewer: StaffScope | None = None) -> DashboardSummary:
+        students = await self.list_students(viewer=viewer)
         enrolled_progress = [
             student.progress_percent
             for student in students
             if student.enrollment_id is not None
         ]
         async with self._session_factory() as session:
-            pending_reviews = await session.scalar(
-                select(func.count(Submission.id)).where(
+            pending_query = (
+                select(func.count(Submission.id))
+                .join(Enrollment, Enrollment.id == Submission.enrollment_id)
+                .join(Student, Student.id == Enrollment.student_id)
+                .where(
                     Submission.source == SubmissionSource.TELEGRAM,
                     Submission.status.in_(
                         [SubmissionStatus.SUBMITTED, SubmissionStatus.IN_REVIEW]
-                    )
+                    ),
                 )
             )
+            if viewer is not None and not viewer.is_admin:
+                pending_query = pending_query.where(
+                    or_(
+                        Student.assigned_curator_id.is_(None),
+                        Student.assigned_curator_id == viewer.staff_id,
+                    )
+                )
+            pending_reviews = await session.scalar(pending_query)
             active_courses = await session.scalar(
                 select(func.count(Course.id)).where(
                     Course.is_active.is_(True),
@@ -331,7 +358,11 @@ class AdminDashboardService:
             average_progress_percent=average_progress,
         )
 
-    async def list_students(self) -> list[StudentOverview]:
+    async def list_students(
+        self,
+        *,
+        viewer: StaffScope | None = None,
+    ) -> list[StudentOverview]:
         async with self._session_factory() as session:
             staff_telegram_ids = set(
                 await session.scalars(
@@ -340,7 +371,8 @@ class AdminDashboardService:
                     )
                 )
             )
-            rows = await session.execute(
+            curator = aliased(StaffUser)
+            query = (
                 select(
                     Student.id.label("student_id"),
                     Student.telegram_user_id,
@@ -348,6 +380,8 @@ class AdminDashboardService:
                     Student.last_name,
                     Student.username,
                     Student.is_active,
+                    Student.assigned_curator_id,
+                    curator.display_name.label("assigned_curator_name"),
                     Enrollment.id.label("enrollment_id"),
                     Enrollment.cohort_id.label("cohort_id"),
                     Enrollment.access_type.label("access_type"),
@@ -360,9 +394,18 @@ class AdminDashboardService:
                 .outerjoin(Enrollment, Enrollment.student_id == Student.id)
                 .outerjoin(Cohort, Cohort.id == Enrollment.cohort_id)
                 .outerjoin(Course, Course.id == Cohort.course_id)
+                .outerjoin(curator, curator.id == Student.assigned_curator_id)
                 .where(Student.origin == StudentOrigin.TELEGRAM)
                 .order_by(Student.created_at.desc(), Enrollment.created_at.desc())
             )
+            if viewer is not None and not viewer.is_admin:
+                query = query.where(
+                    or_(
+                        Student.assigned_curator_id.is_(None),
+                        Student.assigned_curator_id == viewer.staff_id,
+                    )
+                )
+            rows = await session.execute(query)
 
             result: list[StudentOverview] = []
             for row in rows:
@@ -423,17 +466,38 @@ class AdminDashboardService:
                         accepted_submissions=accepted_submissions,
                         total_assignments=total_assignments,
                         progress_percent=progress,
+                        assigned_curator_id=row.assigned_curator_id,
+                        assigned_curator_name=row.assigned_curator_name,
                     )
                 )
             return result
+
+    async def assign_curator(
+        self,
+        *,
+        student_id: UUID,
+        curator_id: UUID | None,
+    ) -> StudentDetail:
+        async with session_scope(self._session_factory) as session:
+            student = await session.get(Student, student_id)
+            if student is None or student.origin is not StudentOrigin.TELEGRAM:
+                raise StudentNotFoundError
+            if curator_id is not None:
+                curator = await session.get(StaffUser, curator_id)
+                if curator is None or not curator.is_active:
+                    raise CuratorNotFoundError
+            student.assigned_curator_id = curator_id
+        return await self.get_student_detail(student_id=student_id)
 
     async def get_student_detail(
         self,
         *,
         student_id: UUID,
         enrollment_id: UUID | None = None,
+        viewer: StaffScope | None = None,
     ) -> StudentDetail:
         async with self._session_factory() as session:
+            curator = aliased(StaffUser)
             row = (
                 await session.execute(
                     select(
@@ -443,10 +507,12 @@ class AdminDashboardService:
                         Course.id.label("course_id"),
                         Course.title.label("course_title"),
                         Cohort.title.label("cohort_title"),
+                        curator.display_name.label("assigned_curator_name"),
                     )
                     .outerjoin(Enrollment, Enrollment.student_id == Student.id)
                     .outerjoin(Cohort, Cohort.id == Enrollment.cohort_id)
                     .outerjoin(Course, Course.id == Cohort.course_id)
+                    .outerjoin(curator, curator.id == Student.assigned_curator_id)
                     .where(
                         Student.id == student_id,
                         *(
@@ -464,6 +530,12 @@ class AdminDashboardService:
 
             student = row.Student
             enrollment = row.Enrollment
+            if (
+                viewer is not None
+                and not viewer.is_admin
+                and student.assigned_curator_id not in (None, viewer.staff_id)
+            ):
+                raise StudentNotFoundError
             total_lessons = 0
             total_assignments = 0
             accepted_submissions = 0
@@ -686,6 +758,8 @@ class AdminDashboardService:
                 accepted_submissions=accepted_submissions,
                 total_assignments=total_assignments,
                 progress_percent=progress_percent,
+                assigned_curator_id=student.assigned_curator_id,
+                assigned_curator_name=row.assigned_curator_name,
                 telegram_user_id=student.telegram_user_id,
                 language_code=student.language_code,
                 registered_at=student.created_at,

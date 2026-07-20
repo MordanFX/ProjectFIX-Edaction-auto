@@ -434,6 +434,7 @@ class SubmissionService:
                         Student.first_name,
                         Student.last_name,
                         Student.username,
+                        Student.assigned_curator_id,
                         Lesson.position,
                         Lesson.title.label("lesson_title"),
                         Course.title.label("course_title"),
@@ -452,14 +453,26 @@ class SubmissionService:
             if row is None:
                 raise NotAwaitingQuestionError
 
-            curator_telegram_user_ids = tuple(
-                await session.scalars(
-                    select(StaffUser.telegram_user_id).where(
-                        StaffUser.is_active.is_(True),
-                        StaffUser.telegram_user_id.is_not(None),
+            curator_telegram_user_ids: tuple[int, ...] = ()
+            if row.assigned_curator_id is not None:
+                curator_telegram_user_ids = tuple(
+                    await session.scalars(
+                        select(StaffUser.telegram_user_id).where(
+                            StaffUser.id == row.assigned_curator_id,
+                            StaffUser.is_active.is_(True),
+                            StaffUser.telegram_user_id.is_not(None),
+                        )
                     )
                 )
-            )
+            if not curator_telegram_user_ids:
+                curator_telegram_user_ids = tuple(
+                    await session.scalars(
+                        select(StaffUser.telegram_user_id).where(
+                            StaffUser.is_active.is_(True),
+                            StaffUser.telegram_user_id.is_not(None),
+                        )
+                    )
+                )
             question = TelegramQuestion(
                 student_id=row.StudentBotState.student_id,
                 assignment_id=row.StudentBotState.assignment_id,

@@ -210,6 +210,16 @@ export function updateStudentAccess(
   });
 }
 
+export function assignStudentCurator(
+  studentId: string,
+  curatorId: string | null,
+): Promise<StudentDetail> {
+  return request<StudentDetail>(`/api/students/${studentId}/curator`, {
+    method: "PATCH",
+    body: JSON.stringify({ curator_id: curatorId }),
+  });
+}
+
 export function getCourses(): Promise<CourseOverview[]> {
   return request<CourseOverview[]>("/api/courses");
 }

@@ -13,11 +13,16 @@ from course_platform.api.dependencies import (
 from course_platform.api.schemas import (
     StudentAccessUpdateRequest,
     StudentAccessUpdateResponse,
+    StudentCuratorAssignRequest,
     StudentDetailResponse,
     StudentLessonDetailResponse,
     StudentOverviewResponse,
 )
+from course_platform.models.enums import StaffRole
+from course_platform.models.staff import StaffUser
+from course_platform.services.access_scope import StaffScope
 from course_platform.services.admin_dashboard import (
+    CuratorNotFoundError,
     StudentLessonNotFoundError,
     StudentNotFoundError,
 )
@@ -26,15 +31,18 @@ from course_platform.services.students import StudentAccessError
 router = APIRouter(prefix="/students", tags=["students"])
 
 
+def _scope(staff: StaffUser) -> StaffScope:
+    return StaffScope(staff_id=staff.id, is_admin=staff.role is StaffRole.ADMIN)
+
+
 @router.get("", response_model=list[StudentOverviewResponse])
 async def students_overview(
     staff: CurrentStaffDependency,
     dashboard: AdminDashboardServiceDependency,
 ) -> list[StudentOverviewResponse]:
-    del staff
     return [
         StudentOverviewResponse.from_domain(item)
-        for item in await dashboard.list_students()
+        for item in await dashboard.list_students(viewer=_scope(staff))
     ]
 
 
@@ -45,11 +53,11 @@ async def student_detail(
     dashboard: AdminDashboardServiceDependency,
     enrollment_id: UUID | None = None,
 ) -> StudentDetailResponse:
-    del staff
     try:
         detail = await dashboard.get_student_detail(
             student_id=student_id,
             enrollment_id=enrollment_id,
+            viewer=_scope(staff),
         )
     except StudentNotFoundError:
         raise HTTPException(
@@ -70,13 +78,13 @@ async def student_lesson_detail(
     staff: CurrentStaffDependency,
     dashboard: AdminDashboardServiceDependency,
 ) -> StudentLessonDetailResponse:
-    del staff
     try:
         return StudentLessonDetailResponse.from_domain(
             await dashboard.get_student_lesson_detail(
                 student_id=student_id,
                 enrollment_id=enrollment_id,
                 lesson_id=lesson_id,
+                viewer=_scope(staff),
             )
         )
     except StudentLessonNotFoundError:
@@ -119,6 +127,32 @@ async def update_student_access(
             detail="Unable to update student access",
         ) from None
     return StudentAccessUpdateResponse.from_domain(detail)
+
+
+@router.patch("/{student_id}/curator", response_model=StudentDetailResponse)
+async def assign_student_curator(
+    student_id: UUID,
+    payload: StudentCuratorAssignRequest,
+    admin: CurrentAdminDependency,
+    dashboard: AdminDashboardServiceDependency,
+) -> StudentDetailResponse:
+    del admin
+    try:
+        detail = await dashboard.assign_curator(
+            student_id=student_id,
+            curator_id=payload.curator_id,
+        )
+    except StudentNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Telegram student not found",
+        ) from None
+    except CuratorNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Curator not found or inactive",
+        ) from None
+    return StudentDetailResponse.from_domain(detail)
 
 
 @router.delete("/{student_id}")

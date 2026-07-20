@@ -288,6 +288,8 @@ export interface StudentOverview {
   accepted_submissions: number;
   total_assignments: number;
   progress_percent: number;
+  assigned_curator_id: string | null;
+  assigned_curator_name: string | null;
 }
 
 export type LessonProgressStatus =

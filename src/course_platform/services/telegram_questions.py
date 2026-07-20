@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_platform.db.session import session_scope
@@ -17,7 +17,8 @@ from course_platform.models import (
     Student,
     TelegramQuestion,
 )
-from course_platform.models.enums import AttachmentKind
+from course_platform.models.enums import AttachmentKind, StaffRole
+from course_platform.services.access_scope import StaffScope
 
 
 class TelegramQuestionNotFoundError(RuntimeError):
@@ -105,6 +106,7 @@ class TelegramQuestionService:
         self,
         *,
         include_resolved: bool = True,
+        viewer: StaffScope | None = None,
     ) -> list[TelegramQuestionOverview]:
         async with self._session_factory() as session:
             query = (
@@ -118,6 +120,13 @@ class TelegramQuestionService:
             )
             if not include_resolved:
                 query = query.where(TelegramQuestion.status == "open")
+            if viewer is not None and not viewer.is_admin:
+                query = query.where(
+                    or_(
+                        Student.assigned_curator_id.is_(None),
+                        Student.assigned_curator_id == viewer.staff_id,
+                    )
+                )
             return [self._overview(*row) for row in (await session.execute(query)).all()]
 
     async def resolve_question(
@@ -125,11 +134,19 @@ class TelegramQuestionService:
         *,
         question_id: UUID,
         staff_id: UUID,
+        viewer: StaffScope | None = None,
     ) -> TelegramQuestionOverview:
         async with session_scope(self._session_factory) as session:
             question = await session.get(TelegramQuestion, question_id)
             if question is None:
                 raise TelegramQuestionNotFoundError
+            if viewer is not None and not viewer.is_admin:
+                student = await session.get(Student, question.student_id)
+                if student is not None and student.assigned_curator_id not in (
+                    None,
+                    viewer.staff_id,
+                ):
+                    raise TelegramQuestionNotFoundError
             question.status = "resolved"
             question.resolved_at = datetime.now(UTC)
             question.resolved_by_staff_id = staff_id
@@ -183,6 +200,11 @@ class TelegramQuestionService:
             question, student, lesson = row
             if question.status != "open":
                 raise TelegramQuestionAlreadyResolvedError
+            if reviewer.role is not StaffRole.ADMIN and student.assigned_curator_id not in (
+                None,
+                reviewer.id,
+            ):
+                raise TelegramQuestionNotFoundError
 
             state = await session.get(StaffBotState, reviewer.id)
             if state is None:
