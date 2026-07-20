@@ -34,6 +34,7 @@ from course_platform.services.submissions import (
     UnsupportedSubmissionKindError,
 )
 from course_platform.services.telegram_questions import (
+    EmptyQuestionAnswerError,
     EmptyQuestionReplyError,
     NoPendingQuestionReplyError,
     TelegramQuestionAlreadyResolvedError,
@@ -434,3 +435,38 @@ async def test_unassigned_student_question_notifies_all_active_curators(
 
     receipt = await ask_question(session_factory, service, text="For anyone")
     assert {666, 777}.issubset(receipt.curator_telegram_user_ids)
+
+
+async def test_curator_can_answer_question_from_panel(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    submission_service = await prepare_student(session_factory)
+    receipt = await ask_question(session_factory, submission_service, text="Panel question")
+
+    async with session_factory() as session:
+        staff = StaffUser(login="panel-curator", display_name="Panel Curator")
+        session.add(staff)
+        await session.commit()
+        staff_id = staff.id
+
+    questions_service = TelegramQuestionService(session_factory)
+
+    with pytest.raises(EmptyQuestionAnswerError):
+        await questions_service.answer_question(
+            question_id=receipt.question_id, staff_id=staff_id, message="   "
+        )
+
+    result = await questions_service.answer_question(
+        question_id=receipt.question_id,
+        staff_id=staff_id,
+        message="  Here is the panel answer  ",
+    )
+    assert result.student_telegram_user_id == 123
+    assert result.overview.status == "resolved"
+    assert result.overview.answer_text == "Here is the panel answer"
+    assert result.overview.resolved_by == "Panel Curator"
+
+    with pytest.raises(TelegramQuestionAlreadyResolvedError):
+        await questions_service.answer_question(
+            question_id=receipt.question_id, staff_id=staff_id, message="Too late"
+        )

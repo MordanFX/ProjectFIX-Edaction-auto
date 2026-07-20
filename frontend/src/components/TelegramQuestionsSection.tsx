@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
 
-import { APIError, getTelegramQuestionAttachmentPlayback, getTelegramQuestions, resolveTelegramQuestion } from "../api";
+import {
+  answerTelegramQuestion,
+  APIError,
+  getTelegramQuestionAttachmentPlayback,
+  getTelegramQuestions,
+  resolveTelegramQuestion,
+} from "../api";
 import type { TelegramQuestion } from "../types";
 
-export function TelegramQuestionsSection() {
+export function TelegramQuestionsSection({ onRefresh }: { onRefresh?: () => Promise<void> }) {
   const [questions, setQuestions] = useState<TelegramQuestion[]>([]);
   const [filter, setFilter] = useState<"open" | "all" | "resolved">("open");
   const openQuestions = questions.filter((question) => question.status === "open");
@@ -19,9 +25,19 @@ export function TelegramQuestionsSection() {
     void loadQuestions();
   }, []);
 
+  async function afterChange() {
+    await loadQuestions();
+    if (onRefresh) await onRefresh();
+  }
+
   async function resolve(questionId: string) {
     await resolveTelegramQuestion(questionId);
-    await loadQuestions();
+    await afterChange();
+  }
+
+  async function answer(questionId: string, message: string) {
+    await answerTelegramQuestion(questionId, message);
+    await afterChange();
   }
 
   return (
@@ -54,7 +70,12 @@ export function TelegramQuestionsSection() {
         {filtered.length ? (
           <div className="discord-question-list">
             {filtered.map((question) => (
-              <QuestionRow key={question.question_id} question={question} onResolve={resolve} />
+              <QuestionRow
+                key={question.question_id}
+                question={question}
+                onResolve={resolve}
+                onAnswer={answer}
+              />
             ))}
           </div>
         ) : (
@@ -68,12 +89,17 @@ export function TelegramQuestionsSection() {
   );
 }
 
-function QuestionRow({ question, onResolve }: {
+function QuestionRow({ question, onResolve, onAnswer }: {
   question: TelegramQuestion;
   onResolve: (questionId: string) => Promise<void>;
+  onAnswer: (questionId: string, message: string) => Promise<void>;
 }) {
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
+  const [answering, setAnswering] = useState(false);
+  const [answerText, setAnswerText] = useState("");
+  const [answerSaving, setAnswerSaving] = useState(false);
+  const [answerError, setAnswerError] = useState<string | null>(null);
   const lessonLabel = question.lesson_title
     ? `Урок ${question.lesson_position ?? "?"}: ${question.lesson_title}`
     : "Урок не определён";
@@ -93,6 +119,23 @@ function QuestionRow({ question, onResolve }: {
     }
   }
 
+  async function submitAnswer() {
+    if (!answerText.trim()) return;
+    setAnswerSaving(true);
+    setAnswerError(null);
+    try {
+      await onAnswer(question.question_id, answerText.trim());
+      setAnswering(false);
+      setAnswerText("");
+    } catch (caughtError) {
+      setAnswerError(
+        caughtError instanceof APIError ? caughtError.message : "Не удалось отправить ответ",
+      );
+    } finally {
+      setAnswerSaving(false);
+    }
+  }
+
   return (
     <article>
       <div className="discord-question-list__main">
@@ -108,6 +151,26 @@ function QuestionRow({ question, onResolve }: {
               <em>Закрыто: {question.resolved_by || "куратор"}{question.resolved_at ? ` · ${formatShortDate(question.resolved_at)}` : ""}</em>
             </>
           )}
+          {answering && (
+            <div className="telegram-question-answer-form feedback-field">
+              <textarea
+                value={answerText}
+                onChange={(event) => setAnswerText(event.target.value)}
+                placeholder="Ответ ученику, уйдёт ему в Telegram"
+                rows={3}
+                disabled={answerSaving}
+              />
+              {answerError && <div className="form-error">{answerError}</div>}
+              <div className="telegram-question-answer-form__actions">
+                <button type="button" onClick={() => { setAnswering(false); setAnswerError(null); }} disabled={answerSaving}>
+                  Отмена
+                </button>
+                <button type="button" onClick={() => void submitAnswer()} disabled={answerSaving || !answerText.trim()}>
+                  {answerSaving ? "Отправляем…" : "Отправить ответ"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
       <div className="discord-question-list__actions">
@@ -118,6 +181,9 @@ function QuestionRow({ question, onResolve }: {
           <button onClick={() => void openAttachment()} disabled={opening}>
             {opening ? "Открываем…" : "Вложение ↗"}
           </button>
+        )}
+        {question.status === "open" && !answering && (
+          <button onClick={() => setAnswering(true)}>Ответить</button>
         )}
         {question.status === "open" && (
           <button onClick={() => void onResolve(question.question_id)}>Закрыть вопрос</button>

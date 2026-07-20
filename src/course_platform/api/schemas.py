@@ -386,6 +386,10 @@ class TelegramQuestionResponse(APIModel):
         return cls(**asdict(item))
 
 
+class TelegramQuestionAnswerRequest(APIModel):
+    message: str = Field(min_length=1, max_length=4000)
+
+
 class DiscordAccessResponse(APIModel):
     student_id: UUID
     guild_id: str

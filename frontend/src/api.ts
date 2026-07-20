@@ -340,6 +340,16 @@ export function resolveTelegramQuestion(questionId: string): Promise<TelegramQue
   });
 }
 
+export function answerTelegramQuestion(
+  questionId: string,
+  message: string,
+): Promise<TelegramQuestion> {
+  return request<TelegramQuestion>(`/api/telegram-questions/${questionId}/answer`, {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+}
+
 export function getTelegramQuestionAttachmentPlayback(
   questionId: string,
 ): Promise<AttachmentPlayback> {

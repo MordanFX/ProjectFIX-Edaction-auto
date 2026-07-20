@@ -9,6 +9,7 @@ import {
   getDiscordOverview,
   getReviewQueue,
   getStudents,
+  getTelegramQuestions,
   hasSession,
   login,
   logout,
@@ -38,6 +39,7 @@ import type {
   ReviewVerdict,
   Staff,
   StudentOverview,
+  TelegramQuestion,
 } from "./types";
 
 type AppState = "loading" | "login" | "dashboard";
@@ -62,6 +64,7 @@ interface DashboardData {
   students: StudentOverview[];
   courses: CourseOverview[];
   discord: DiscordWorkspaceOverview;
+  telegramQuestions: TelegramQuestion[];
 }
 
 export function App() {
@@ -82,6 +85,11 @@ export function App() {
         (item) => item.status === "submitted" || item.status === "in_review",
       ).length ?? 0,
     [data?.queue],
+  );
+
+  const openQuestionsCount = useMemo(
+    () => data?.telegramQuestions.filter((question) => question.status === "open").length ?? 0,
+    [data?.telegramQuestions],
   );
 
   useEffect(() => {
@@ -110,16 +118,18 @@ export function App() {
   }, [selectedReview, selectedStudent, selectedCourse]);
 
   async function loadDashboard() {
-    const [staff, queue, discordQueue, summary, students, courses, discord] = await Promise.all([
-      getCurrentStaff(),
-      getReviewQueue("telegram"),
-      getReviewQueue("discord"),
-      getDashboardSummary(),
-      getStudents(),
-      getCourses(),
-      getDiscordOverview(),
-    ]);
-    setData({ staff, queue, discordQueue, summary, students, courses, discord });
+    const [staff, queue, discordQueue, summary, students, courses, discord, telegramQuestions] =
+      await Promise.all([
+        getCurrentStaff(),
+        getReviewQueue("telegram"),
+        getReviewQueue("discord"),
+        getDashboardSummary(),
+        getStudents(),
+        getCourses(),
+        getDiscordOverview(),
+        getTelegramQuestions(),
+      ]);
+    setData({ staff, queue, discordQueue, summary, students, courses, discord, telegramQuestions });
     setError(null);
     setState("dashboard");
   }
@@ -210,7 +220,7 @@ export function App() {
             className={section === "questions" ? "active" : ""}
             onClick={() => setSection("questions")}
           >
-            <i>03</i><b>Вопросы</b>
+            <i>03</i><b>Вопросы</b><span>{openQuestionsCount}</span>
           </button>
           <button
             className={section === "courses" ? "active" : ""}
@@ -295,7 +305,7 @@ export function App() {
           {error && <div className="page-error">{error}</div>}
           {notice && <div className="toast">✓ {notice}</div>}
           {section === "reviews" && <ReviewsSection queue={data.queue} summary={data.summary} staffId={data.staff.id} onRefresh={handleRefresh} onSelect={setSelectedReview} />}
-          {section === "questions" && <TelegramQuestionsSection />}
+          {section === "questions" && <TelegramQuestionsSection onRefresh={handleRefresh} />}
           {section === "discord" && (
             <DiscordSection
               overview={data.discord}

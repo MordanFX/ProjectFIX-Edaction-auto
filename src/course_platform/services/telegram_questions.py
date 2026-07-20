@@ -45,6 +45,10 @@ class EmptyQuestionReplyError(RuntimeError):
     pass
 
 
+class EmptyQuestionAnswerError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class TelegramQuestionOverview:
     question_id: UUID
@@ -87,6 +91,12 @@ class QuestionReplyCompletion:
     lesson_position: int | None
     lesson_title: str | None
     message: str
+
+
+@dataclass(frozen=True, slots=True)
+class QuestionPanelAnswer:
+    overview: TelegramQuestionOverview
+    student_telegram_user_id: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +162,49 @@ class TelegramQuestionService:
             question.resolved_by_staff_id = staff_id
             await session.flush()
             return await self._question_by_id(session, question.id)
+
+    async def answer_question(
+        self,
+        *,
+        question_id: UUID,
+        staff_id: UUID,
+        message: str,
+        viewer: StaffScope | None = None,
+    ) -> QuestionPanelAnswer:
+        normalized = message.strip()
+        if not normalized:
+            raise EmptyQuestionAnswerError
+
+        async with session_scope(self._session_factory) as session:
+            row = (
+                await session.execute(
+                    select(TelegramQuestion, Student)
+                    .join(Student, Student.id == TelegramQuestion.student_id)
+                    .where(TelegramQuestion.id == question_id)
+                )
+            ).one_or_none()
+            if row is None:
+                raise TelegramQuestionNotFoundError
+            question, student = row
+            if viewer is not None and not viewer.is_admin and student.assigned_curator_id not in (
+                None,
+                viewer.staff_id,
+            ):
+                raise TelegramQuestionNotFoundError
+            if question.status != "open":
+                raise TelegramQuestionAlreadyResolvedError
+
+            question.status = "resolved"
+            question.answer_text = normalized
+            question.resolved_at = datetime.now(UTC)
+            question.resolved_by_staff_id = staff_id
+            student_telegram_user_id = student.telegram_user_id
+            await session.flush()
+            overview = await self._question_by_id(session, question.id)
+            return QuestionPanelAnswer(
+                overview=overview,
+                student_telegram_user_id=student_telegram_user_id,
+            )
 
     async def get_attachment_media_source(
         self,

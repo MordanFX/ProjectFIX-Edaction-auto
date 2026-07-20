@@ -2,6 +2,7 @@
 
 from asyncio import to_thread
 from collections.abc import AsyncIterator
+from html import escape
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
@@ -15,7 +16,11 @@ from course_platform.api.dependencies import (
     SettingsDependency,
     TelegramQuestionServiceDependency,
 )
-from course_platform.api.schemas import AttachmentPlaybackResponse, TelegramQuestionResponse
+from course_platform.api.schemas import (
+    AttachmentPlaybackResponse,
+    TelegramQuestionAnswerRequest,
+    TelegramQuestionResponse,
+)
 from course_platform.api.security import (
     InvalidAccessTokenError,
     JWTConfigurationError,
@@ -27,6 +32,8 @@ from course_platform.models.enums import StaffRole
 from course_platform.models.staff import StaffUser
 from course_platform.services.access_scope import StaffScope
 from course_platform.services.telegram_questions import (
+    EmptyQuestionAnswerError,
+    TelegramQuestionAlreadyResolvedError,
     TelegramQuestionAttachmentNotFoundError,
     TelegramQuestionNotFoundError,
 )
@@ -66,6 +73,52 @@ async def resolve_telegram_question(
     except TelegramQuestionNotFoundError:
         raise HTTPException(status_code=404, detail="telegram-question-not-found") from None
     return TelegramQuestionResponse.from_domain(item)
+
+
+@router.post("/{question_id}/answer", response_model=TelegramQuestionResponse)
+async def answer_telegram_question(
+    question_id: UUID,
+    payload: TelegramQuestionAnswerRequest,
+    staff: CurrentStaffDependency,
+    settings: SettingsDependency,
+    questions: TelegramQuestionServiceDependency,
+    request: Request,
+) -> TelegramQuestionResponse:
+    try:
+        result = await questions.answer_question(
+            question_id=question_id,
+            staff_id=staff.id,
+            message=payload.message,
+            viewer=_scope(staff),
+        )
+    except EmptyQuestionAnswerError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Answer message must not be empty",
+        ) from None
+    except TelegramQuestionNotFoundError:
+        raise HTTPException(status_code=404, detail="telegram-question-not-found") from None
+    except TelegramQuestionAlreadyResolvedError:
+        raise HTTPException(status_code=409, detail="telegram-question-already-resolved") from None
+
+    if result.student_telegram_user_id is not None and settings.telegram_bot_token is not None:
+        telegram = TelegramBotClient(
+            settings.telegram_bot_token,
+            api_url=settings.telegram_api_url,
+            transport=request.app.state.telegram_transport,
+        )
+        try:
+            await telegram.send_message(
+                result.student_telegram_user_id,
+                f"💬 <b>ОТВЕТ КУРАТОРА</b>\n\n{escape(payload.message.strip())}",
+                parse_mode="HTML",
+            )
+        except (TelegramAPIError, TelegramTransportError):
+            pass
+        finally:
+            await telegram.close()
+
+    return TelegramQuestionResponse.from_domain(result.overview)
 
 
 @router.post(
