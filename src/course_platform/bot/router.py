@@ -1678,6 +1678,7 @@ class MessageRouter:
         ("▶ Pre session · Запись 1", "https://vimeo.com/1209755707"),
         ("▶ Pre session · Запись 2", "https://vimeo.com/1210090244"),
         ("📊 Backtest by Vlad · 08.07", "https://vimeo.com/1208160612"),
+        ("📊 Backtest by Doc", "https://player.vimeo.com/video/1206838129"),
     )
 
     @staticmethod
@@ -1687,8 +1688,8 @@ class MessageRouter:
             "▶ <b>Pre session</b>\n"
             "Pre-session практикантов под присмотром менторов — тренируемся "
             "и исправляем ошибки в составлении плана.\n\n"
-            "📊 <b>Backtest by Vlad · 08.07</b>\n"
-            "Участники практикума проводят backtest вместе с ментором."
+            "📊 <b>Backtest</b>\n"
+            "Vlad и Doc проводят backtest вместе с участниками практикума."
         )
 
     @classmethod

@@ -1742,4 +1742,5 @@ async def test_post_course_section_unlocks_after_completion(
         "https://player.vimeo.com/video/1209755707",
         "https://player.vimeo.com/video/1210090244",
         "https://player.vimeo.com/video/1208160612",
+        "https://player.vimeo.com/video/1206838129",
     ]
