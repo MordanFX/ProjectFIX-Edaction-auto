@@ -226,6 +226,12 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .discord-filters input::placeholder { color: #6f7f94; }
 .discord-filters input:focus, .discord-filters select:focus, .discord-modal-field select:focus { border-color: #3988db; box-shadow: 0 0 0 3px rgb(57 136 219 / 14%); }
 .page-heading__actions { display: flex; gap: 8px; }
+.student-status-filter { display: flex; align-items: end; gap: 16px; padding: 16px 20px; background: #0a1522; border-bottom: 1px solid #223249; }
+.student-status-filter label { display: grid; gap: 7px; min-width: 220px; }
+.student-status-filter label > span { color: #8f9eb2; font-size: 12px; font-weight: 750; letter-spacing: .04em; }
+.student-status-filter select { min-width: 0; height: 42px; padding: 0 12px; color: #edf4fb; background: #131f2f; border: 1px solid #34465c; border-radius: 9px; outline: none; font-size: 14px; }
+.student-status-filter select:focus { border-color: #3988db; box-shadow: 0 0 0 3px rgb(57 136 219 / 14%); }
+.student-status-filter__count { padding-bottom: 11px; color: #8f9eb2; font-size: 13px; }
 .discord-courses { margin-bottom: 20px; overflow: hidden; color: #eaf1fb; background: #0c1827; border: 1px solid #223249; border-radius: 18px; }
 .discord-courses > header { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 18px 22px; border-bottom: 1px solid #223249; }
 .discord-courses h2 { margin: 4px 0 0; font-size: 19px; }

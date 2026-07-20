@@ -1,3 +1,5 @@
+import { useMemo, useState } from "react";
+
 import type { DashboardSummary, StudentOverview } from "../types";
 
 interface StudentsSectionProps {
@@ -7,12 +9,27 @@ interface StudentsSectionProps {
   onSelect: (student: StudentOverview) => void;
 }
 
+type StudentStatusFilter = "all" | "new" | "active" | "paused" | "completed" | "revoked";
+
+function studentStatusKey(student: StudentOverview): Exclude<StudentStatusFilter, "all"> {
+  return student.enrollment_status ?? "new";
+}
+
 export function StudentsSection({
   students,
   summary,
   onRefresh,
   onSelect,
 }: StudentsSectionProps) {
+  const [statusFilter, setStatusFilter] = useState<StudentStatusFilter>("all");
+  const filtered = useMemo(
+    () =>
+      statusFilter === "all"
+        ? students
+        : students.filter((student) => studentStatusKey(student) === statusFilter),
+    [students, statusFilter],
+  );
+
   return (
     <>
       <div className="page-heading">
@@ -38,9 +55,28 @@ export function StudentsSection({
           value={summary.completed_enrollments}
         />
       </div>
-      {students.length ? (
+      <div className="student-status-filter">
+        <label>
+          <span>Статус</span>
+          <select
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as StudentStatusFilter)}
+          >
+            <option value="all">Все статусы</option>
+            <option value="new">Новые (без курса)</option>
+            <option value="active">Учится</option>
+            <option value="paused">Пауза</option>
+            <option value="completed">Завершили</option>
+            <option value="revoked">Доступ закрыт</option>
+          </select>
+        </label>
+        <span className="student-status-filter__count">
+          {filtered.length} из {students.length}
+        </span>
+      </div>
+      {filtered.length ? (
         <section className="student-grid">
-          {students.map((student) => (
+          {filtered.map((student) => (
             <StudentCard
               key={`${student.student_id}-${student.enrollment_id ?? "none"}`}
               student={student}
@@ -50,7 +86,9 @@ export function StudentsSection({
         </section>
       ) : (
         <section className="review-filter-empty">
-          Telegram-ученики появятся здесь после команды /start в боте.
+          {students.length
+            ? "Нет учеников с таким статусом."
+            : "Telegram-ученики появятся здесь после команды /start в боте."}
         </section>
       )}
     </>
