@@ -403,7 +403,7 @@ class MessageRouter:
             except (TelegramAPIError, TelegramTransportError):
                 pass
             else:
-                if lesson is not None and lesson.assignment_instructions:
+                if self._should_show_homework_text(lesson):
                     await self._api.send_message(
                         message.chat.id,
                         self._lesson_homework_text(lesson),
@@ -573,7 +573,7 @@ class MessageRouter:
                         except (TelegramAPIError, TelegramTransportError):
                             pass
                         else:
-                            if lesson.assignment_instructions:
+                            if self._should_show_homework_text(lesson):
                                 await self._api.send_message(
                                     callback.message.chat.id,
                                     self._lesson_homework_text(lesson),
@@ -677,6 +677,12 @@ class MessageRouter:
             return None
         metadata = await self._vimeo.get_metadata(video_url)
         return metadata.thumbnail_url if metadata is not None else None
+
+    @staticmethod
+    def _should_show_homework_text(lesson: CurrentLesson | None) -> bool:
+        if lesson is None or not lesson.assignment_instructions:
+            return False
+        return not lesson.requires_view_confirmation or lesson.viewed_at is not None
 
     @staticmethod
     def _lesson_media_caption(lesson: CurrentLesson | None) -> str:

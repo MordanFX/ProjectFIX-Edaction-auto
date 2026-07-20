@@ -12,6 +12,7 @@ from course_platform.bot.router import MessageRouter
 from course_platform.bot.types import TelegramUpdate
 from course_platform.bot.ui import curator_keyboard, stage_keyboard
 from course_platform.dev.seed_demo import seed_demo_data
+from course_platform.integrations.vimeo import VimeoMetadata
 from course_platform.models import (
     Enrollment,
     Feedback,
@@ -43,6 +44,11 @@ from course_platform.services.students import (
 )
 from course_platform.services.submissions import HomeworkAttachment, SubmissionService
 from course_platform.services.telegram_questions import TelegramQuestionService
+
+
+class FakeVimeoClient:
+    async def get_metadata(self, video_url: str) -> VimeoMetadata:
+        return VimeoMetadata(thumbnail_url="https://i.vimeocdn.com/video/lesson.jpg")
 
 
 def message_update(
@@ -616,6 +622,53 @@ async def test_viewed_callback_updates_lesson_and_unlocks_homework(
     assert inline_buttons[0]["text"] == "📝 Открыть домашнее задание"
     assert inline_buttons[0]["callback_data"].startswith("homework:")
     assert "СДАЧА ДОМАШНЕГО ЗАДАНИЯ" in str(api_calls[-1][1]["text"])
+
+
+async def test_legacy_video_lesson_does_not_auto_send_homework_before_view(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).where(Lesson.position == 1))
+        assert lesson is not None
+        lesson.video_source = VideoSource.EXTERNAL_URL
+        lesson.video_reference = "https://vimeo.com/1196958528"
+        await session.commit()
+
+    api_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", maxsplit=1)[-1]
+        payload = json.loads(request.content)
+        api_calls.append((method, payload))
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": len(api_calls),
+                    "date": 1_700_000_001,
+                    "chat": {"id": 555, "type": "private"},
+                },
+            },
+        )
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            SubmissionService(session_factory),
+            ReviewService(session_factory),
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+            vimeo=FakeVimeoClient(),  # type: ignore[arg-type]
+        )
+        await router.handle(message_update("/lesson"))
+
+    assert [method for method, _ in api_calls] == ["sendPhoto"]
 
 
 async def test_submit_button_and_next_text_create_submission(
