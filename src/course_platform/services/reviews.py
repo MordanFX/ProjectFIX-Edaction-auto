@@ -121,6 +121,7 @@ def _review_attachment(attachment: SubmissionAttachment) -> ReviewAttachment:
             )
             or attachment.external_url is not None
             or attachment.local_path is not None
+            or attachment.telegram_file_id is not None
         ),
     )
 
@@ -142,6 +143,7 @@ def _feedback_review_attachment(attachment: FeedbackAttachment) -> ReviewAttachm
             )
             or attachment.external_url is not None
             or attachment.local_path is not None
+            or attachment.telegram_file_id is not None
         ),
     )
 

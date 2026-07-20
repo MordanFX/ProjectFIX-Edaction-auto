@@ -277,6 +277,36 @@ async def test_panel_uploaded_feedback_attachment_is_available_in_history(
     assert detail.feedback_attachments[0].source_available is True
 
 
+async def test_feedback_attachment_with_only_telegram_file_id_is_available(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Older/partial feedback rows can still be opened through Telegram file_id."""
+    submission_id = await prepare_pending_submission(session_factory)
+    reviews = ReviewService(session_factory)
+
+    await reviews.review(
+        submission_id=submission_id,
+        reviewer_telegram_user_id=222,
+        verdict=FeedbackVerdict.ACCEPTED,
+        message="РџСЂРёРЅСЏС‚Рѕ",
+        attachments=(
+            FeedbackAttachmentInput(
+                kind=AttachmentKind.PHOTO,
+                telegram_file_id="telegram-feedback-photo",
+                telegram_file_unique_id="telegram-feedback-photo-unique",
+                file_name="РЎРєСЂРёРЅС€РѕС‚.png",
+                mime_type="image/png",
+                file_size=44_000,
+            ),
+        ),
+    )
+
+    detail = await reviews.get_detail(submission_id)
+
+    assert len(detail.feedback_attachments) == 1
+    assert detail.feedback_attachments[0].source_available is True
+
+
 async def test_only_active_staff_can_review_and_decision_is_final(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
