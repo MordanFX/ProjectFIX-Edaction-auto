@@ -75,12 +75,19 @@ def message_update(
     )
 
 
-def photo_update(*, sender_id: int = 555) -> TelegramUpdate:
+def photo_update(
+    *,
+    sender_id: int = 555,
+    update_id: int = 11,
+    message_id: int = 4,
+    caption: str | None = "Photo result",
+    file_id: str = "large-photo",
+) -> TelegramUpdate:
     return TelegramUpdate.model_validate(
         {
-            "update_id": 11,
+            "update_id": update_id,
             "message": {
-                "message_id": 4,
+                "message_id": message_id,
                 "date": 1_700_000_002,
                 "chat": {"id": sender_id, "type": "private"},
                 "from": {
@@ -88,7 +95,7 @@ def photo_update(*, sender_id: int = 555) -> TelegramUpdate:
                     "is_bot": False,
                     "first_name": "Alex",
                 },
-                "caption": "Photo result",
+                "caption": caption,
                 "photo": [
                     {
                         "file_id": "small-photo",
@@ -98,7 +105,7 @@ def photo_update(*, sender_id: int = 555) -> TelegramUpdate:
                         "file_size": 100,
                     },
                     {
-                        "file_id": "large-photo",
+                        "file_id": file_id,
                         "file_unique_id": "photo-unique",
                         "width": 1280,
                         "height": 720,
@@ -855,6 +862,88 @@ async def test_photo_while_awaiting_question_is_saved_as_question_not_homework(
     assert any(
         method == "copyMessage" and payload.get("chat_id") == 777
         for method, payload in api_calls
+    )
+
+
+async def test_second_album_photo_after_question_is_relayed_not_counted_as_homework(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Telegram delivers an album as separate messages; the tail photo must not
+    fall through into a homework submission once the question is created."""
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).order_by(Lesson.position))
+        reviewer = await session.scalar(select(StaffUser))
+        assert lesson is not None
+        assert reviewer is not None
+        lesson_id = lesson.id
+        reviewer.telegram_user_id = 777
+        await session.commit()
+    await ProgressionService(session_factory).mark_current_viewed(555)
+
+    api_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", maxsplit=1)[-1]
+        payload = json.loads(request.content)
+        api_calls.append((method, payload))
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": len(api_calls),
+                    "date": 1_700_000_001,
+                    "chat": {"id": payload.get("chat_id", 555), "type": "private"},
+                    "text": payload.get("text", ""),
+                },
+            },
+        )
+
+    submissions = SubmissionService(session_factory)
+    questions = TelegramQuestionService(session_factory)
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            submissions,
+            ReviewService(session_factory),
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+            questions=questions,
+        )
+        await router.handle(review_callback_update(f"ask_curator:{lesson_id}"))
+        await router.handle(photo_update(update_id=11, message_id=4, file_id="first-photo"))
+        await router.handle(
+            photo_update(update_id=12, message_id=5, caption=None, file_id="second-photo")
+        )
+
+    async with session_factory() as session:
+        submissions_count = len((await session.scalars(select(Submission))).all())
+        question = await session.scalar(select(TelegramQuestion))
+        questions_count = len((await session.scalars(select(TelegramQuestion))).all())
+
+    assert submissions_count == 0
+    assert questions_count == 1
+    assert question is not None
+    assert question.attachment_telegram_file_id == "first-photo"
+
+    assert any(
+        method == "sendMessage"
+        and payload.get("chat_id") == 555
+        and "Добавлено к вопросу" in str(payload.get("text"))
+        for method, payload in api_calls
+    )
+    assert (
+        sum(
+            1
+            for method, payload in api_calls
+            if method == "copyMessage" and payload.get("chat_id") == 777
+        )
+        == 2
     )
 
 

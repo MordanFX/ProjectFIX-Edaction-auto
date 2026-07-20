@@ -69,6 +69,7 @@ from course_platform.services.submissions import (
 from course_platform.services.telegram_questions import (
     EmptyQuestionReplyError,
     NoPendingQuestionReplyError,
+    RecentQuestionAttachmentTarget,
     TelegramQuestionAlreadyResolvedError,
     TelegramQuestionNotFoundError,
     TelegramQuestionService,
@@ -358,6 +359,17 @@ class MessageRouter:
             or message.video_note is not None
         ) and await self._submissions.is_awaiting_question(message.sender.id):
             response = await self._accept_question_attachment(message.sender.id, message)
+        elif (
+            message.document is not None
+            or message.photo
+            or message.video is not None
+            or message.video_note is not None
+        ) and self._questions is not None and (
+            recent_question := await self._questions.find_recent_open_question(
+                message.sender.id
+            )
+        ) is not None:
+            response = await self._accept_question_attachment_tail(message, recent_question)
         elif (
             message.document is not None
             or message.photo
@@ -2810,6 +2822,22 @@ class MessageRouter:
         return (
             "✅ <b>Вопрос отправлен куратору</b>\n\n"
             "Куратор увидит вопрос вместе с вложением и сможет ответить тебе лично."
+        )
+
+    async def _accept_question_attachment_tail(
+        self,
+        message: TelegramMessage,
+        target: RecentQuestionAttachmentTarget,
+    ) -> str:
+        """A late album photo/file that arrived right after a question was created."""
+        for curator_id in target.curator_telegram_user_ids:
+            try:
+                await self._api.copy_message(curator_id, message.chat.id, message.message_id)
+            except (TelegramAPIError, TelegramTransportError):
+                continue
+        return (
+            "📎 <b>Добавлено к вопросу</b>\n\n"
+            "Куратор увидит это вложение вместе с твоим вопросом."
         )
 
     async def _accept_attachment_submission(

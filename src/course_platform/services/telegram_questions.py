@@ -1,7 +1,7 @@
 """Curator-facing view over Telegram student questions."""
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -100,6 +100,12 @@ class QuestionPanelAnswer:
 
 
 @dataclass(frozen=True, slots=True)
+class RecentQuestionAttachmentTarget:
+    question_id: UUID
+    curator_telegram_user_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class TelegramQuestionAttachmentSource:
     kind: AttachmentKind
     telegram_file_id: str | None
@@ -138,6 +144,63 @@ class TelegramQuestionService:
                     )
                 )
             return [self._overview(*row) for row in (await session.execute(query)).all()]
+
+    async def find_recent_open_question(
+        self,
+        telegram_user_id: int,
+        *,
+        within_seconds: int = 120,
+    ) -> RecentQuestionAttachmentTarget | None:
+        """Find a just-asked open question to attach a late album photo to.
+
+        Telegram delivers an album as separate messages. By the time the
+        second photo arrives, the question has already been created and the
+        student's conversation state cleared, so this catches that stray
+        photo instead of letting it fall through into a homework submission.
+        """
+        async with self._session_factory() as session:
+            cutoff = datetime.now(UTC) - timedelta(seconds=within_seconds)
+            row = (
+                await session.execute(
+                    select(TelegramQuestion, Student.assigned_curator_id)
+                    .join(Student, Student.id == TelegramQuestion.student_id)
+                    .where(
+                        Student.telegram_user_id == telegram_user_id,
+                        TelegramQuestion.status == "open",
+                        TelegramQuestion.created_at >= cutoff,
+                    )
+                    .order_by(TelegramQuestion.created_at.desc())
+                    .limit(1)
+                )
+            ).one_or_none()
+            if row is None:
+                return None
+            question, assigned_curator_id = row
+
+            curator_telegram_user_ids: tuple[int, ...] = ()
+            if assigned_curator_id is not None:
+                curator_telegram_user_ids = tuple(
+                    await session.scalars(
+                        select(StaffUser.telegram_user_id).where(
+                            StaffUser.id == assigned_curator_id,
+                            StaffUser.is_active.is_(True),
+                            StaffUser.telegram_user_id.is_not(None),
+                        )
+                    )
+                )
+            if not curator_telegram_user_ids:
+                curator_telegram_user_ids = tuple(
+                    await session.scalars(
+                        select(StaffUser.telegram_user_id).where(
+                            StaffUser.is_active.is_(True),
+                            StaffUser.telegram_user_id.is_not(None),
+                        )
+                    )
+                )
+            return RecentQuestionAttachmentTarget(
+                question_id=question.id,
+                curator_telegram_user_ids=curator_telegram_user_ids,
+            )
 
     async def resolve_question(
         self,
