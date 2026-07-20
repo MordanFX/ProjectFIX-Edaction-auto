@@ -69,6 +69,7 @@ from course_platform.services.submissions import (
 from course_platform.services.telegram_questions import (
     EmptyQuestionReplyError,
     NoPendingQuestionReplyError,
+    RecentAnsweredQuestionTarget,
     RecentQuestionAttachmentTarget,
     TelegramQuestionAlreadyResolvedError,
     TelegramQuestionNotFoundError,
@@ -370,6 +371,17 @@ class MessageRouter:
             )
         ) is not None:
             response = await self._accept_question_attachment_tail(message, recent_question)
+        elif (
+            message.document is not None
+            or message.photo
+            or message.video is not None
+            or message.video_note is not None
+        ) and self._questions is not None and (
+            recent_answer := await self._questions.find_recently_answered_question(
+                message.sender.id
+            )
+        ) is not None:
+            response = await self._forward_answer_tail_attachment(message, recent_answer)
         elif (
             message.document is not None
             or message.photo
@@ -2839,6 +2851,21 @@ class MessageRouter:
             "📎 <b>Добавлено к вопросу</b>\n\n"
             "Куратор увидит это вложение вместе с твоим вопросом."
         )
+
+    async def _forward_answer_tail_attachment(
+        self,
+        message: TelegramMessage,
+        target: RecentAnsweredQuestionTarget,
+    ) -> str:
+        """A late album photo/file from a curator who just answered a question."""
+        if target.student_telegram_user_id is not None:
+            try:
+                await self._api.copy_message(
+                    target.student_telegram_user_id, message.chat.id, message.message_id
+                )
+            except (TelegramAPIError, TelegramTransportError):
+                pass
+        return "📎 <b>Добавлено к ответу</b>\n\nУченик получит это вложение."
 
     async def _accept_attachment_submission(
         self,

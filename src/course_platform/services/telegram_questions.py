@@ -100,6 +100,12 @@ class QuestionPanelAnswer:
 
 
 @dataclass(frozen=True, slots=True)
+class RecentAnsweredQuestionTarget:
+    question_id: UUID
+    student_telegram_user_id: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class RecentQuestionAttachmentTarget:
     question_id: UUID
     curator_telegram_user_ids: tuple[int, ...]
@@ -200,6 +206,43 @@ class TelegramQuestionService:
             return RecentQuestionAttachmentTarget(
                 question_id=question.id,
                 curator_telegram_user_ids=curator_telegram_user_ids,
+            )
+
+    async def find_recently_answered_question(
+        self,
+        reviewer_telegram_user_id: int,
+        *,
+        within_seconds: int = 120,
+    ) -> RecentAnsweredQuestionTarget | None:
+        """Find a question this curator just answered, to forward a late album photo.
+
+        Mirrors find_recent_open_question but on the curator side: the first
+        photo of an album completes the reply and clears the pending-reply
+        state, so the rest need somewhere to land instead of "Не понял
+        сообщение".
+        """
+        async with self._session_factory() as session:
+            cutoff = datetime.now(UTC) - timedelta(seconds=within_seconds)
+            row = (
+                await session.execute(
+                    select(TelegramQuestion, Student.telegram_user_id)
+                    .join(StaffUser, StaffUser.id == TelegramQuestion.resolved_by_staff_id)
+                    .join(Student, Student.id == TelegramQuestion.student_id)
+                    .where(
+                        StaffUser.telegram_user_id == reviewer_telegram_user_id,
+                        TelegramQuestion.status == "resolved",
+                        TelegramQuestion.resolved_at >= cutoff,
+                    )
+                    .order_by(TelegramQuestion.resolved_at.desc())
+                    .limit(1)
+                )
+            ).one_or_none()
+            if row is None:
+                return None
+            question, student_telegram_user_id = row
+            return RecentAnsweredQuestionTarget(
+                question_id=question.id,
+                student_telegram_user_id=student_telegram_user_id,
             )
 
     async def resolve_question(

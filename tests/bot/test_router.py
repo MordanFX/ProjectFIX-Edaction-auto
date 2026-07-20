@@ -1041,6 +1041,110 @@ async def test_curator_can_reply_to_question_with_photo(
     )
 
 
+async def test_curator_album_tail_photo_after_answering_is_forwarded_not_unknown(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Telegram delivers an album as separate messages; the tail photo of a
+    curator's reply must reach the student instead of "Не понял сообщение"."""
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).order_by(Lesson.position))
+        reviewer = await session.scalar(select(StaffUser))
+        assert lesson is not None
+        assert reviewer is not None
+        lesson_id = lesson.id
+        reviewer.telegram_user_id = 777
+        await session.commit()
+    await ProgressionService(session_factory).mark_current_viewed(555)
+
+    api_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", maxsplit=1)[-1]
+        payload = json.loads(request.content)
+        api_calls.append((method, payload))
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": len(api_calls),
+                    "date": 1_700_000_001,
+                    "chat": {"id": payload.get("chat_id", 555), "type": "private"},
+                    "text": payload.get("text", ""),
+                },
+            },
+        )
+
+    submissions = SubmissionService(session_factory)
+    questions = TelegramQuestionService(session_factory)
+
+    def build_router(api: TelegramBotClient) -> MessageRouter:
+        return MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            submissions,
+            ReviewService(session_factory),
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+            questions=questions,
+        )
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = build_router(api)
+        await router.handle(review_callback_update(f"ask_curator:{lesson_id}"))
+        await router.handle(message_update("What should I do here?"))
+
+    async with session_factory() as session:
+        question = await session.scalar(select(TelegramQuestion))
+    assert question is not None
+    question_id = question.id
+
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = build_router(api)
+        await router.handle(
+            curator_callback_update(f"answer_question:{question_id}", curator_id=777)
+        )
+        await router.handle(
+            photo_update(sender_id=777, update_id=20, message_id=30, file_id="answer-photo-1")
+        )
+        await router.handle(
+            photo_update(
+                sender_id=777,
+                update_id=21,
+                message_id=31,
+                caption=None,
+                file_id="answer-photo-2",
+            )
+        )
+
+    assert not any(
+        method == "sendMessage"
+        and payload.get("chat_id") == 777
+        and "Не понял сообщение" in str(payload.get("text"))
+        for method, payload in api_calls
+    )
+    assert (
+        sum(
+            1
+            for method, payload in api_calls
+            if method == "copyMessage"
+            and payload.get("chat_id") == 555
+            and payload.get("from_chat_id") == 777
+        )
+        == 2
+    )
+    assert any(
+        method == "sendMessage"
+        and payload.get("chat_id") == 777
+        and "Добавлено к ответу" in str(payload.get("text"))
+        for method, payload in api_calls
+    )
+
+
 async def test_photo_submission_uses_largest_telegram_size(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
