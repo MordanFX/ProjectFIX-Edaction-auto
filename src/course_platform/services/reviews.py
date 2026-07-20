@@ -141,6 +141,7 @@ def _feedback_review_attachment(attachment: FeedbackAttachment) -> ReviewAttachm
                 and attachment.source_message_id is not None
             )
             or attachment.external_url is not None
+            or attachment.local_path is not None
         ),
     )
 

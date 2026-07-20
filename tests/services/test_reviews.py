@@ -249,6 +249,34 @@ async def test_curator_feedback_can_include_attachment_without_text(
     assert detail.feedback_attachments[0].source_available is True
 
 
+async def test_panel_uploaded_feedback_attachment_is_available_in_history(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Web-panel uploads only set local_path (no Telegram source_chat_id)."""
+    submission_id = await prepare_pending_submission(session_factory)
+    reviews = ReviewService(session_factory)
+
+    await reviews.review(
+        submission_id=submission_id,
+        reviewer_telegram_user_id=222,
+        verdict=FeedbackVerdict.REVISION_REQUESTED,
+        message="Исправь, пожалуйста",
+        attachments=(
+            FeedbackAttachmentInput(
+                kind=AttachmentKind.PHOTO,
+                local_path="data/feedback_uploads/example.png",
+                file_name="Скриншот.png",
+                mime_type="image/png",
+                file_size=12345,
+            ),
+        ),
+    )
+
+    detail = await reviews.get_detail(submission_id)
+    assert len(detail.feedback_attachments) == 1
+    assert detail.feedback_attachments[0].source_available is True
+
+
 async def test_only_active_staff_can_review_and_decision_is_final(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
