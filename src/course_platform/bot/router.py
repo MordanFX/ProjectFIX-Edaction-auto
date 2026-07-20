@@ -331,6 +331,13 @@ class MessageRouter:
             or message.photo
             or message.video is not None
             or message.video_note is not None
+        ) and await self._submissions.is_awaiting_question(message.sender.id):
+            response = await self._accept_question_attachment(message.sender.id, message)
+        elif (
+            message.document is not None
+            or message.photo
+            or message.video is not None
+            or message.video_note is not None
         ):
             response = await self._accept_attachment_submission(message.sender.id, message)
         elif command.startswith("/"):
@@ -2469,6 +2476,10 @@ class MessageRouter:
         if not question.curator_telegram_user_ids:
             return
         text = self._curator_question_text(question)
+        has_attachment = (
+            question.attachment_source_chat_id is not None
+            and question.attachment_source_message_id is not None
+        )
         for curator_id in question.curator_telegram_user_ids:
             try:
                 await self._api.send_message(
@@ -2477,6 +2488,12 @@ class MessageRouter:
                     parse_mode="HTML",
                     reply_markup=curator_keyboard(),
                 )
+                if has_attachment:
+                    await self._api.copy_message(
+                        curator_id,
+                        question.attachment_source_chat_id,
+                        question.attachment_source_message_id,
+                    )
             except (TelegramAPIError, TelegramTransportError):
                 continue
 
@@ -2540,13 +2557,10 @@ class MessageRouter:
             )
         return None
 
-    async def _accept_attachment_submission(
-        self,
-        telegram_user_id: int,
-        message: TelegramMessage,
-    ) -> str:
+    @staticmethod
+    def _homework_attachment_from_message(message: TelegramMessage) -> HomeworkAttachment:
         if message.document is not None:
-            attachment = HomeworkAttachment(
+            return HomeworkAttachment(
                 kind=AttachmentKind.DOCUMENT,
                 telegram_file_id=message.document.file_id,
                 telegram_file_unique_id=message.document.file_unique_id,
@@ -2556,8 +2570,8 @@ class MessageRouter:
                 source_chat_id=message.chat.id,
                 source_message_id=message.message_id,
             )
-        elif message.video is not None:
-            attachment = HomeworkAttachment(
+        if message.video is not None:
+            return HomeworkAttachment(
                 kind=AttachmentKind.VIDEO,
                 telegram_file_id=message.video.file_id,
                 telegram_file_unique_id=message.video.file_unique_id,
@@ -2570,8 +2584,8 @@ class MessageRouter:
                 width=message.video.width,
                 height=message.video.height,
             )
-        elif message.video_note is not None:
-            attachment = HomeworkAttachment(
+        if message.video_note is not None:
+            return HomeworkAttachment(
                 kind=AttachmentKind.VIDEO_NOTE,
                 telegram_file_id=message.video_note.file_id,
                 telegram_file_unique_id=message.video_note.file_unique_id,
@@ -2583,23 +2597,48 @@ class MessageRouter:
                 width=message.video_note.length,
                 height=message.video_note.length,
             )
-        else:
-            photo = max(
-                message.photo,
-                key=lambda item: item.file_size or item.width * item.height,
-            )
-            attachment = HomeworkAttachment(
-                kind=AttachmentKind.PHOTO,
-                telegram_file_id=photo.file_id,
-                telegram_file_unique_id=photo.file_unique_id,
-                file_size=photo.file_size,
-                mime_type="image/jpeg",
-                source_chat_id=message.chat.id,
-                source_message_id=message.message_id,
-                width=photo.width,
-                height=photo.height,
-            )
+        photo = max(
+            message.photo,
+            key=lambda item: item.file_size or item.width * item.height,
+        )
+        return HomeworkAttachment(
+            kind=AttachmentKind.PHOTO,
+            telegram_file_id=photo.file_id,
+            telegram_file_unique_id=photo.file_unique_id,
+            file_size=photo.file_size,
+            mime_type="image/jpeg",
+            source_chat_id=message.chat.id,
+            source_message_id=message.message_id,
+            width=photo.width,
+            height=photo.height,
+        )
 
+    async def _accept_question_attachment(
+        self,
+        telegram_user_id: int,
+        message: TelegramMessage,
+    ) -> str:
+        attachment = self._homework_attachment_from_message(message)
+        try:
+            question = await self._submissions.submit_question_attachment(
+                telegram_user_id,
+                attachment,
+                caption=message.caption,
+            )
+        except NotAwaitingQuestionError:
+            return self._unknown_command_text()
+        await self._notify_curators_about_question(question)
+        return (
+            "✅ <b>Вопрос отправлен куратору</b>\n\n"
+            "Куратор увидит вопрос вместе с вложением и сможет ответить тебе лично."
+        )
+
+    async def _accept_attachment_submission(
+        self,
+        telegram_user_id: int,
+        message: TelegramMessage,
+    ) -> str:
+        attachment = self._homework_attachment_from_message(message)
         try:
             receipt = await self._submissions.submit_attachment(
                 telegram_user_id,
@@ -2666,6 +2705,16 @@ class MessageRouter:
             if question.student_username
             else "username не указан"
         )
+        question_body = (
+            escape(question.question_text)
+            if question.question_text
+            else "(без текста, смотри вложение ниже)"
+        )
+        attachment_note = (
+            "\n\n📎 К вопросу приложено вложение — придёт следующим сообщением."
+            if question.attachment_kind is not None
+            else ""
+        )
         return (
             "❓ <b>ВОПРОС ОТ УЧЕНИКА</b>\n\n"
             f"👤 <b>{escape(question.student_name)}</b> · {username}\n"
@@ -2673,7 +2722,8 @@ class MessageRouter:
             f"📘 Урок {question.lesson_position}: "
             f"<b>{escape(question.lesson_title)}</b>\n\n"
             "💬 <b>Вопрос:</b>\n"
-            f"{escape(question.question_text)}"
+            f"{question_body}"
+            f"{attachment_note}"
         )
 
     @staticmethod

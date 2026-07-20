@@ -24,6 +24,7 @@ from course_platform.services.discord_lesson_deliveries import DiscordLessonDeli
 from course_platform.services.discord_questions import DiscordQuestionService
 from course_platform.services.reviews import ReviewService
 from course_platform.services.students import StudentAccessService
+from course_platform.services.telegram_questions import TelegramQuestionService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 
@@ -84,6 +85,10 @@ def get_discord_question_service(request: Request) -> DiscordQuestionService:
     return DiscordQuestionService(get_session_factory(request))
 
 
+def get_telegram_question_service(request: Request) -> TelegramQuestionService:
+    return TelegramQuestionService(get_session_factory(request))
+
+
 async def get_current_staff(
     token: Annotated[str, Depends(oauth2_scheme)],
     session: Annotated[AsyncSession, Depends(get_session)],
@@ -142,4 +147,7 @@ DiscordLessonDeliveryServiceDependency = Annotated[
 ]
 DiscordQuestionServiceDependency = Annotated[
     DiscordQuestionService, Depends(get_discord_question_service)
+]
+TelegramQuestionServiceDependency = Annotated[
+    TelegramQuestionService, Depends(get_telegram_question_service)
 ]

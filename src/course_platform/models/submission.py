@@ -33,7 +33,7 @@ from course_platform.models.types import enum_values
 if TYPE_CHECKING:
     from course_platform.models.course import Assignment
     from course_platform.models.staff import StaffUser
-    from course_platform.models.student import Enrollment
+    from course_platform.models.student import Enrollment, Student
 
 
 class Submission(PrimaryKeyMixin, TimestampMixin, Base):
@@ -203,3 +203,40 @@ class FeedbackAttachment(PrimaryKeyMixin, TimestampMixin, Base):
     height: Mapped[int | None]
 
     feedback: Mapped[Feedback] = relationship(back_populates="attachments")
+
+
+class TelegramQuestion(PrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "telegram_questions"
+
+    student_id: Mapped[UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), index=True
+    )
+    assignment_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("assignments.id", ondelete="SET NULL"), index=True
+    )
+    text_body: Mapped[str | None] = mapped_column(Text)
+    attachment_kind: Mapped[AttachmentKind | None] = mapped_column(
+        Enum(
+            AttachmentKind,
+            name="telegram_question_attachment_kind",
+            native_enum=False,
+            length=32,
+            values_callable=enum_values,
+        )
+    )
+    attachment_telegram_file_id: Mapped[str | None] = mapped_column(String(512))
+    attachment_telegram_file_unique_id: Mapped[str | None] = mapped_column(String(255))
+    attachment_file_name: Mapped[str | None] = mapped_column(String(512))
+    attachment_mime_type: Mapped[str | None] = mapped_column(String(255))
+    attachment_file_size: Mapped[int | None] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(
+        String(16), default="open", server_default="open", index=True
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by_staff_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("staff_users.id", ondelete="SET NULL"), index=True
+    )
+
+    student: Mapped[Student] = relationship()
+    assignment: Mapped[Assignment | None] = relationship()
+    resolved_by: Mapped[StaffUser | None] = relationship()

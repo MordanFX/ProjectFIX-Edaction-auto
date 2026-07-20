@@ -224,6 +224,23 @@ export interface DiscordQuestion {
   resolved_by: string | null;
 }
 
+export interface TelegramQuestion {
+  question_id: string;
+  student_id: string;
+  student_name: string;
+  student_username: string | null;
+  lesson_position: number | null;
+  lesson_title: string | null;
+  course_title: string | null;
+  text_body: string | null;
+  has_attachment: boolean;
+  attachment_kind: AttachmentKind | null;
+  status: "open" | "resolved";
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+}
+
 export type DiscordAccessStatus =
   | "active"
   | "expiring"

@@ -5,7 +5,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_platform.dev.seed_demo import seed_demo_data
-from course_platform.models import Assignment, StudentBotState, Submission, SubmissionAttachment
+from course_platform.models import (
+    Assignment,
+    Lesson,
+    StaffUser,
+    StudentBotState,
+    Submission,
+    SubmissionAttachment,
+    TelegramQuestion,
+)
 from course_platform.models.enums import (
     AttachmentKind,
     ConversationState,
@@ -17,11 +25,13 @@ from course_platform.services.students import StudentRegistration, StudentServic
 from course_platform.services.submissions import (
     HomeworkAttachment,
     LessonNotViewedError,
+    NotAwaitingQuestionError,
     NotAwaitingSubmissionError,
     SubmissionPendingError,
     SubmissionService,
     UnsupportedSubmissionKindError,
 )
+from course_platform.services.telegram_questions import TelegramQuestionService
 
 
 async def test_homework_is_locked_until_lesson_view_is_confirmed(
@@ -190,3 +200,96 @@ async def test_wrong_attachment_kind_keeps_submission_open(
 
     receipt = await service.submit_text(123, "Correct text response")
     assert receipt.attempt_number == 1
+
+
+async def test_question_text_persists_and_is_awaiting_flips(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = await prepare_student(session_factory)
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).order_by(Lesson.position))
+    assert lesson is not None
+
+    assert await service.is_awaiting_question(123) is False
+    with pytest.raises(NotAwaitingQuestionError):
+        await service.submit_question_text(123, "Too early")
+
+    await service.begin_question(123, expected_lesson_id=lesson.id)
+    assert await service.is_awaiting_question(123) is True
+
+    receipt = await service.submit_question_text(123, "  How do I submit?  ")
+    assert receipt.question_text == "How do I submit?"
+    assert receipt.attachment_kind is None
+    assert await service.is_awaiting_question(123) is False
+
+    async with session_factory() as session:
+        question = await session.scalar(select(TelegramQuestion))
+    assert question is not None
+    assert question.text_body == "How do I submit?"
+    assert question.status == "open"
+
+
+async def test_question_attachment_is_saved_instead_of_homework(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = await prepare_student(session_factory)
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).order_by(Lesson.position))
+    assert lesson is not None
+    await service.begin_question(123, expected_lesson_id=lesson.id)
+
+    receipt = await service.submit_question_attachment(
+        123,
+        HomeworkAttachment(
+            kind=AttachmentKind.PHOTO,
+            telegram_file_id="question-photo",
+            telegram_file_unique_id="question-photo-unique",
+            source_chat_id=123,
+            source_message_id=9,
+        ),
+        caption="Look at this screenshot",
+    )
+    assert receipt.attachment_kind is AttachmentKind.PHOTO
+    assert receipt.question_text == "Look at this screenshot"
+
+    async with session_factory() as session:
+        submission = await session.scalar(select(Submission))
+        question = await session.scalar(select(TelegramQuestion))
+    assert submission is None
+    assert question is not None
+    assert question.attachment_kind is AttachmentKind.PHOTO
+    assert question.attachment_telegram_file_id == "question-photo"
+    assert question.text_body == "Look at this screenshot"
+
+
+async def test_telegram_question_is_listed_and_resolved(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = await prepare_student(session_factory)
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).order_by(Lesson.position))
+    assert lesson is not None
+    await service.begin_question(123, expected_lesson_id=lesson.id)
+    receipt = await service.submit_question_text(123, "Need help")
+
+    async with session_factory() as session:
+        staff = StaffUser(login="curator", display_name="Curator")
+        session.add(staff)
+        await session.commit()
+        staff_id = staff.id
+
+    questions_service = TelegramQuestionService(session_factory)
+    open_questions = await questions_service.list_questions(include_resolved=False)
+    assert [item.question_id for item in open_questions] == [receipt.question_id]
+    assert open_questions[0].text_body == "Need help"
+    assert open_questions[0].status == "open"
+
+    resolved = await questions_service.resolve_question(
+        question_id=receipt.question_id,
+        staff_id=staff_id,
+    )
+    assert resolved.status == "resolved"
+    assert resolved.resolved_by == "Curator"
+
+    still_open = await questions_service.list_questions(include_resolved=False)
+    assert still_open == []

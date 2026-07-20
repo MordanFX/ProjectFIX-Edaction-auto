@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,6 +23,7 @@ from course_platform.models import (
     StudentBotState,
     Submission,
     SubmissionAttachment,
+    TelegramQuestion,
 )
 from course_platform.models.enums import (
     AttachmentKind,
@@ -105,6 +107,7 @@ class CuratorQuestionPrompt:
 
 @dataclass(frozen=True, slots=True)
 class CuratorQuestionReceipt:
+    question_id: UUID
     student_name: str
     student_username: str | None
     lesson_position: int
@@ -112,6 +115,11 @@ class CuratorQuestionReceipt:
     course_title: str
     question_text: str
     curator_telegram_user_ids: tuple[int, ...]
+    attachment_kind: AttachmentKind | None = None
+    attachment_telegram_file_id: str | None = None
+    attachment_caption: str | None = None
+    attachment_source_chat_id: int | None = None
+    attachment_source_message_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,6 +387,15 @@ class SubmissionService:
 
             return self._receipt(row, attempt_number)
 
+    async def is_awaiting_question(self, telegram_user_id: int) -> bool:
+        async with self._session_factory() as session:
+            state = await session.scalar(
+                select(StudentBotState.state)
+                .join(Student, Student.id == StudentBotState.student_id)
+                .where(Student.telegram_user_id == telegram_user_id)
+            )
+            return state is ConversationState.AWAITING_CURATOR_QUESTION
+
     async def submit_question_text(
         self,
         telegram_user_id: int,
@@ -387,7 +404,28 @@ class SubmissionService:
         normalized_text = text.strip()
         if not normalized_text:
             raise EmptySubmissionError
+        return await self._submit_question(telegram_user_id, text=normalized_text)
 
+    async def submit_question_attachment(
+        self,
+        telegram_user_id: int,
+        attachment: HomeworkAttachment,
+        *,
+        caption: str | None = None,
+    ) -> CuratorQuestionReceipt:
+        return await self._submit_question(
+            telegram_user_id,
+            text=(caption or "").strip() or None,
+            attachment=attachment,
+        )
+
+    async def _submit_question(
+        self,
+        telegram_user_id: int,
+        *,
+        text: str | None,
+        attachment: HomeworkAttachment | None = None,
+    ) -> CuratorQuestionReceipt:
         async with session_scope(self._session_factory) as session:
             row = (
                 await session.execute(
@@ -422,6 +460,24 @@ class SubmissionService:
                     )
                 )
             )
+            question = TelegramQuestion(
+                student_id=row.StudentBotState.student_id,
+                assignment_id=row.StudentBotState.assignment_id,
+                text_body=text,
+                attachment_kind=attachment.kind if attachment else None,
+                attachment_telegram_file_id=(
+                    attachment.telegram_file_id if attachment else None
+                ),
+                attachment_telegram_file_unique_id=(
+                    attachment.telegram_file_unique_id if attachment else None
+                ),
+                attachment_file_name=attachment.file_name if attachment else None,
+                attachment_mime_type=attachment.mime_type if attachment else None,
+                attachment_file_size=attachment.file_size if attachment else None,
+            )
+            session.add(question)
+            await session.flush()
+
             row.StudentBotState.state = ConversationState.IDLE
             row.StudentBotState.assignment_id = None
 
@@ -429,13 +485,23 @@ class SubmissionService:
                 part for part in (row.first_name, row.last_name) if part
             )
             return CuratorQuestionReceipt(
+                question_id=question.id,
                 student_name=student_name,
                 student_username=row.username,
                 lesson_position=row.position,
                 lesson_title=row.lesson_title,
                 course_title=row.course_title,
-                question_text=normalized_text,
+                question_text=text or "",
                 curator_telegram_user_ids=curator_telegram_user_ids,
+                attachment_kind=attachment.kind if attachment else None,
+                attachment_telegram_file_id=(
+                    attachment.telegram_file_id if attachment else None
+                ),
+                attachment_caption=text if attachment else None,
+                attachment_source_chat_id=attachment.source_chat_id if attachment else None,
+                attachment_source_message_id=(
+                    attachment.source_message_id if attachment else None
+                ),
             )
 
     async def submit_attachment(

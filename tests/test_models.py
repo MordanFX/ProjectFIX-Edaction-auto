@@ -52,6 +52,7 @@ def test_expected_tables_are_registered() -> None:
         "student_bot_states",
         "submission_attachments",
         "submissions",
+        "telegram_questions",
     }
 
 

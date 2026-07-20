@@ -30,6 +30,7 @@ import type {
   StudentOverview,
   LessonCover,
   LessonWrite,
+  TelegramQuestion,
 } from "./types";
 
 const TOKEN_KEY = "course-platform-access-token";
@@ -317,6 +318,25 @@ export function resolveDiscordQuestion(questionId: string): Promise<DiscordQuest
   return request<DiscordQuestion>(`/api/discord/questions/${questionId}/resolve`, {
     method: "POST",
   });
+}
+
+export function getTelegramQuestions(): Promise<TelegramQuestion[]> {
+  return request<TelegramQuestion[]>("/api/telegram-questions");
+}
+
+export function resolveTelegramQuestion(questionId: string): Promise<TelegramQuestion> {
+  return request<TelegramQuestion>(`/api/telegram-questions/${questionId}/resolve`, {
+    method: "POST",
+  });
+}
+
+export function getTelegramQuestionAttachmentPlayback(
+  questionId: string,
+): Promise<AttachmentPlayback> {
+  return request<AttachmentPlayback>(
+    `/api/telegram-questions/${questionId}/attachment/playback`,
+    { method: "POST" },
+  );
 }
 
 export function createDiscordLessonDispatch(payload: {

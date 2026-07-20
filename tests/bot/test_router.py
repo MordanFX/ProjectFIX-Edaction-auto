@@ -22,6 +22,7 @@ from course_platform.models import (
     Student,
     Submission,
     SubmissionAttachment,
+    TelegramQuestion,
 )
 from course_platform.models.enums import (
     AttachmentKind,
@@ -700,6 +701,82 @@ async def test_student_can_ask_curator_from_homework_card(
         and payload.get("chat_id") == 777
         and "ВОПРОС ОТ УЧЕНИКА" in str(payload.get("text"))
         and "Notion" in str(payload.get("text"))
+        for method, payload in api_calls
+    )
+
+
+async def test_photo_while_awaiting_question_is_saved_as_question_not_homework(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    students = StudentService(session_factory)
+    await students.register(StudentRegistration(telegram_user_id=555, first_name="Alex"))
+    await seed_demo_data(session_factory)
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).order_by(Lesson.position))
+        reviewer = await session.scalar(select(StaffUser))
+        assert lesson is not None
+        assert reviewer is not None
+        lesson_id = lesson.id
+        reviewer.telegram_user_id = 777
+        await session.commit()
+    await ProgressionService(session_factory).mark_current_viewed(555)
+
+    api_calls: list[tuple[str, dict[str, object]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", maxsplit=1)[-1]
+        payload = json.loads(request.content)
+        api_calls.append((method, payload))
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": len(api_calls),
+                    "date": 1_700_000_001,
+                    "chat": {"id": payload.get("chat_id", 555), "type": "private"},
+                    "text": payload.get("text", ""),
+                },
+            },
+        )
+
+    submissions = SubmissionService(session_factory)
+    async with TelegramBotClient("token", transport=httpx.MockTransport(handler)) as api:
+        router = MessageRouter(
+            api,
+            students,
+            LearningService(session_factory),
+            submissions,
+            ReviewService(session_factory),
+            ProgressionService(session_factory),
+            AdminDashboardService(session_factory),
+        )
+        await router.handle(review_callback_update(f"ask_curator:{lesson_id}"))
+        await router.handle(photo_update())
+
+    async with session_factory() as session:
+        submission = await session.scalar(select(Submission))
+        question = await session.scalar(select(TelegramQuestion))
+
+    assert submission is None
+    assert question is not None
+    assert question.attachment_kind is not None
+    assert question.text_body == "Photo result"
+
+    assert any(
+        method == "sendMessage"
+        and payload.get("chat_id") == 555
+        and "Вопрос отправлен куратору" in str(payload.get("text"))
+        for method, payload in api_calls
+    )
+    assert any(
+        method == "sendMessage"
+        and payload.get("chat_id") == 777
+        and "ВОПРОС ОТ УЧЕНИКА" in str(payload.get("text"))
+        for method, payload in api_calls
+    )
+    assert any(
+        method == "copyMessage" and payload.get("chat_id") == 777
         for method, payload in api_calls
     )
 

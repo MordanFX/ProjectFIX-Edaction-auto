@@ -16,6 +16,7 @@ from course_platform.api.routers import (
     reviews,
     staff,
     students,
+    telegram_questions,
 )
 from course_platform.config import Settings, get_settings
 from course_platform.db.session import create_engine, create_session_factory
@@ -62,6 +63,7 @@ def create_app(
     application.include_router(courses.router, prefix="/api")
     application.include_router(discord.router, prefix="/api")
     application.include_router(staff.router, prefix="/api")
+    application.include_router(telegram_questions.router, prefix="/api")
     return application
 
 

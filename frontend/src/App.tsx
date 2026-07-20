@@ -29,6 +29,7 @@ import { ReviewsSection } from "./components/ReviewsSection";
 import { StudentModal } from "./components/StudentModal";
 import { StudentsSection } from "./components/StudentsSection";
 import { TeamSection } from "./components/TeamSection";
+import { TelegramQuestionsSection } from "./components/TelegramQuestionsSection";
 import type {
   CourseOverview,
   DashboardSummary,
@@ -42,6 +43,7 @@ import type {
 type AppState = "loading" | "login" | "dashboard";
 type Section =
   | "reviews"
+  | "questions"
   | "discord"
   | "discord-dispatch"
   | "discord-students"
@@ -205,29 +207,35 @@ export function App() {
             <i>02</i><b>Telegram ученики</b>
           </button>
           <button
+            className={section === "questions" ? "active" : ""}
+            onClick={() => setSection("questions")}
+          >
+            <i>03</i><b>Вопросы</b>
+          </button>
+          <button
             className={section === "courses" ? "active" : ""}
             onClick={() => setSection("courses")}
           >
-            <i>03</i><b>Курсы</b>
+            <i>04</i><b>Курсы</b>
           </button>
           <button
             className={section === "knowledge" ? "active" : ""}
             onClick={() => setSection("knowledge")}
           >
-            <i>04</i><b>База знаний</b>
+            <i>05</i><b>База знаний</b>
           </button>
           <button
             className={section === "cabinet" ? "active" : ""}
             onClick={() => setSection("cabinet")}
           >
-            <i>05</i><b>Мой кабинет</b>
+            <i>06</i><b>Мой кабинет</b>
           </button>
           {data.staff.role === "admin" && (
             <button
               className={section === "team" ? "active" : ""}
               onClick={() => setSection("team")}
             >
-              <i>06</i><b>Команда</b>
+              <i>07</i><b>Команда</b>
             </button>
           )}
           <div className="fix-sidebar__group">
@@ -287,6 +295,7 @@ export function App() {
           {error && <div className="page-error">{error}</div>}
           {notice && <div className="toast">✓ {notice}</div>}
           {section === "reviews" && <ReviewsSection queue={data.queue} summary={data.summary} staffId={data.staff.id} onRefresh={handleRefresh} onSelect={setSelectedReview} />}
+          {section === "questions" && <TelegramQuestionsSection />}
           {section === "discord" && (
             <DiscordSection
               overview={data.discord}

@@ -44,6 +44,7 @@ from course_platform.services.discord_lesson_deliveries import (
 )
 from course_platform.services.discord_questions import DiscordQuestionOverview
 from course_platform.services.reviews import ReviewDetail, ReviewQueueItem
+from course_platform.services.telegram_questions import TelegramQuestionOverview
 
 
 class APIModel(BaseModel):
@@ -361,6 +362,27 @@ class DiscordQuestionResponse(APIModel):
         payload["message_id"] = str(item.message_id)
         payload["discord_user_id"] = str(item.discord_user_id)
         return cls(**payload)
+
+
+class TelegramQuestionResponse(APIModel):
+    question_id: UUID
+    student_id: UUID
+    student_name: str
+    student_username: str | None
+    lesson_position: int | None
+    lesson_title: str | None
+    course_title: str | None
+    text_body: str | None
+    has_attachment: bool
+    attachment_kind: AttachmentKind | None
+    status: str
+    created_at: datetime
+    resolved_at: datetime | None
+    resolved_by: str | None
+
+    @classmethod
+    def from_domain(cls, item: TelegramQuestionOverview) -> "TelegramQuestionResponse":
+        return cls(**asdict(item))
 
 
 class DiscordAccessResponse(APIModel):
