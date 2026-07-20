@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   answerTelegramQuestion,
@@ -7,7 +7,7 @@ import {
   getTelegramQuestions,
   resolveTelegramQuestion,
 } from "../api";
-import type { TelegramQuestion } from "../types";
+import type { AttachmentKind, TelegramQuestion, TelegramQuestionAttachment } from "../types";
 
 export function TelegramQuestionsSection({ onRefresh }: { onRefresh?: () => Promise<void> }) {
   const [questions, setQuestions] = useState<TelegramQuestion[]>([]);
@@ -35,8 +35,8 @@ export function TelegramQuestionsSection({ onRefresh }: { onRefresh?: () => Prom
     await afterChange();
   }
 
-  async function answer(questionId: string, message: string) {
-    await answerTelegramQuestion(questionId, message);
+  async function answer(questionId: string, message: string, files: File[]) {
+    await answerTelegramQuestion(questionId, message, files);
     await afterChange();
   }
 
@@ -92,41 +92,29 @@ export function TelegramQuestionsSection({ onRefresh }: { onRefresh?: () => Prom
 function QuestionRow({ question, onResolve, onAnswer }: {
   question: TelegramQuestion;
   onResolve: (questionId: string) => Promise<void>;
-  onAnswer: (questionId: string, message: string) => Promise<void>;
+  onAnswer: (questionId: string, message: string, files: File[]) => Promise<void>;
 }) {
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const [opening, setOpening] = useState(false);
   const [answering, setAnswering] = useState(false);
   const [answerText, setAnswerText] = useState("");
+  const [answerFiles, setAnswerFiles] = useState<File[]>([]);
   const [answerSaving, setAnswerSaving] = useState(false);
   const [answerError, setAnswerError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const lessonLabel = question.lesson_title
     ? `Урок ${question.lesson_position ?? "?"}: ${question.lesson_title}`
     : "Урок не определён";
-
-  async function openAttachment() {
-    setOpening(true);
-    setAttachmentError(null);
-    try {
-      const playback = await getTelegramQuestionAttachmentPlayback(question.question_id);
-      window.open(playback.url, "_blank", "noopener");
-    } catch (caughtError) {
-      setAttachmentError(
-        caughtError instanceof APIError ? caughtError.message : "Вложение временно недоступно",
-      );
-    } finally {
-      setOpening(false);
-    }
-  }
+  const studentAttachments = question.attachments.filter((item) => item.source === "student");
+  const curatorAttachments = question.attachments.filter((item) => item.source === "curator");
 
   async function submitAnswer() {
-    if (!answerText.trim()) return;
+    if (!answerText.trim() && answerFiles.length === 0) return;
     setAnswerSaving(true);
     setAnswerError(null);
     try {
-      await onAnswer(question.question_id, answerText.trim());
+      await onAnswer(question.question_id, answerText.trim(), answerFiles);
       setAnswering(false);
       setAnswerText("");
+      setAnswerFiles([]);
     } catch (caughtError) {
       setAnswerError(
         caughtError instanceof APIError ? caughtError.message : "Не удалось отправить ответ",
@@ -143,11 +131,32 @@ function QuestionRow({ question, onResolve, onAnswer }: {
         <div>
           <strong>{question.student_name}{question.student_username ? ` · @${question.student_username}` : ""}</strong>
           <small>{formatShortDate(question.created_at)} · {lessonLabel}{question.course_title ? ` · ${question.course_title}` : ""}</small>
-          <p>{question.text_body || (question.has_attachment ? "Без текста, смотри вложение." : "Пустой вопрос.")}</p>
-          {attachmentError && <em>{attachmentError}</em>}
+          <p>{question.text_body || (studentAttachments.length ? "Без текста, смотри вложение." : "Пустой вопрос.")}</p>
+          {studentAttachments.length > 0 && (
+            <div className="telegram-question-attachments">
+              {studentAttachments.map((attachment) => (
+                <AttachmentLink
+                  key={attachment.id}
+                  questionId={question.question_id}
+                  attachment={attachment}
+                />
+              ))}
+            </div>
+          )}
           {question.status === "resolved" && (
             <>
               {question.answer_text && <p className="telegram-question-answer">↳ {question.answer_text}</p>}
+              {curatorAttachments.length > 0 && (
+                <div className="telegram-question-attachments telegram-question-attachments--answer">
+                  {curatorAttachments.map((attachment) => (
+                    <AttachmentLink
+                      key={attachment.id}
+                      questionId={question.question_id}
+                      attachment={attachment}
+                    />
+                  ))}
+                </div>
+              )}
               <em>Закрыто: {question.resolved_by || "куратор"}{question.resolved_at ? ` · ${formatShortDate(question.resolved_at)}` : ""}</em>
             </>
           )}
@@ -160,12 +169,51 @@ function QuestionRow({ question, onResolve, onAnswer }: {
                 rows={3}
                 disabled={answerSaving}
               />
+              {answerFiles.length > 0 && (
+                <ul className="telegram-question-answer-form__files">
+                  {answerFiles.map((file, index) => (
+                    <li key={`${file.name}-${index}`}>
+                      {file.name}
+                      <button
+                        type="button"
+                        onClick={() => setAnswerFiles((files) => files.filter((_, i) => i !== index))}
+                        disabled={answerSaving}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={(event) => {
+                  const picked = Array.from(event.target.files ?? []);
+                  if (picked.length) setAnswerFiles((files) => [...files, ...picked]);
+                  event.target.value = "";
+                }}
+              />
               {answerError && <div className="form-error">{answerError}</div>}
               <div className="telegram-question-answer-form__actions">
-                <button type="button" onClick={() => { setAnswering(false); setAnswerError(null); }} disabled={answerSaving}>
+                <button
+                  type="button"
+                  className="telegram-question-answer-form__attach"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={answerSaving}
+                >
+                  📎 Прикрепить файл
+                </button>
+                <button type="button" onClick={() => { setAnswering(false); setAnswerError(null); setAnswerFiles([]); }} disabled={answerSaving}>
                   Отмена
                 </button>
-                <button type="button" onClick={() => void submitAnswer()} disabled={answerSaving || !answerText.trim()}>
+                <button
+                  type="button"
+                  onClick={() => void submitAnswer()}
+                  disabled={answerSaving || (!answerText.trim() && answerFiles.length === 0)}
+                >
                   {answerSaving ? "Отправляем…" : "Отправить ответ"}
                 </button>
               </div>
@@ -177,11 +225,6 @@ function QuestionRow({ question, onResolve, onAnswer }: {
         <b className={`discord-work-status discord-work-status--${question.status}`}>
           {question.status === "open" ? "Открыт" : "Закрыт"}
         </b>
-        {question.has_attachment && (
-          <button onClick={() => void openAttachment()} disabled={opening}>
-            {opening ? "Открываем…" : "Вложение ↗"}
-          </button>
-        )}
         {question.status === "open" && !answering && (
           <button onClick={() => setAnswering(true)}>Ответить</button>
         )}
@@ -191,6 +234,40 @@ function QuestionRow({ question, onResolve, onAnswer }: {
       </div>
     </article>
   );
+}
+
+function AttachmentLink({ questionId, attachment }: {
+  questionId: string;
+  attachment: TelegramQuestionAttachment;
+}) {
+  const [opening, setOpening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function open() {
+    setOpening(true);
+    setError(null);
+    try {
+      const playback = await getTelegramQuestionAttachmentPlayback(questionId, attachment.id);
+      window.open(playback.url, "_blank", "noopener");
+    } catch (caughtError) {
+      setError(caughtError instanceof APIError ? caughtError.message : "Вложение недоступно");
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  return (
+    <span className="telegram-question-attachments__item">
+      <button type="button" onClick={() => void open()} disabled={opening}>
+        {opening ? "Открываем…" : `📎 ${attachment.file_name || attachmentKindLabel(attachment.kind)}`}
+      </button>
+      {error && <em>{error}</em>}
+    </span>
+  );
+}
+
+function attachmentKindLabel(kind: AttachmentKind) {
+  return { photo: "Фото", document: "Файл", video: "Видео", video_note: "Видео" }[kind];
 }
 
 function initials(name: string) {

@@ -6,9 +6,9 @@ from html import escape
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 
 from course_platform.api.dependencies import (
@@ -28,11 +28,12 @@ from course_platform.api.security import (
     decode_attachment_media_token,
 )
 from course_platform.bot.api import TelegramAPIError, TelegramBotClient, TelegramTransportError
-from course_platform.models.enums import StaffRole
+from course_platform.models.enums import AttachmentKind, StaffRole
 from course_platform.models.staff import StaffUser
 from course_platform.services.access_scope import StaffScope
 from course_platform.services.telegram_questions import (
     EmptyQuestionAnswerError,
+    QuestionAnswerAttachmentInput,
     TelegramQuestionAlreadyResolvedError,
     TelegramQuestionAttachmentNotFoundError,
     TelegramQuestionNotFoundError,
@@ -40,6 +41,7 @@ from course_platform.services.telegram_questions import (
 
 router = APIRouter(prefix="/telegram-questions", tags=["telegram-questions"])
 PLAYBACK_TOKEN_TTL_SECONDS = 1800
+MAX_ANSWER_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
 def _scope(staff: StaffUser) -> StaffScope:
@@ -75,6 +77,31 @@ async def resolve_telegram_question(
     return TelegramQuestionResponse.from_domain(item)
 
 
+async def _notify_student_of_answer(
+    request: Request,
+    settings: SettingsDependency,
+    student_telegram_user_id: int | None,
+    message: str,
+) -> None:
+    if student_telegram_user_id is None or settings.telegram_bot_token is None:
+        return
+    telegram = TelegramBotClient(
+        settings.telegram_bot_token,
+        api_url=settings.telegram_api_url,
+        transport=request.app.state.telegram_transport,
+    )
+    try:
+        await telegram.send_message(
+            student_telegram_user_id,
+            f"💬 <b>ОТВЕТ КУРАТОРА</b>\n\n{escape(message.strip())}",
+            parse_mode="HTML",
+        )
+    except (TelegramAPIError, TelegramTransportError):
+        pass
+    finally:
+        await telegram.close()
+
+
 @router.post("/{question_id}/answer", response_model=TelegramQuestionResponse)
 async def answer_telegram_question(
     question_id: UUID,
@@ -101,43 +128,110 @@ async def answer_telegram_question(
     except TelegramQuestionAlreadyResolvedError:
         raise HTTPException(status_code=409, detail="telegram-question-already-resolved") from None
 
-    if result.student_telegram_user_id is not None and settings.telegram_bot_token is not None:
-        telegram = TelegramBotClient(
-            settings.telegram_bot_token,
-            api_url=settings.telegram_api_url,
-            transport=request.app.state.telegram_transport,
-        )
-        try:
-            await telegram.send_message(
-                result.student_telegram_user_id,
-                f"💬 <b>ОТВЕТ КУРАТОРА</b>\n\n{escape(payload.message.strip())}",
-                parse_mode="HTML",
-            )
-        except (TelegramAPIError, TelegramTransportError):
-            pass
-        finally:
-            await telegram.close()
+    await _notify_student_of_answer(
+        request, settings, result.student_telegram_user_id, payload.message
+    )
+    return TelegramQuestionResponse.from_domain(result.overview)
 
+
+def _attachment_kind_from_upload(upload: UploadFile) -> AttachmentKind:
+    content_type = upload.content_type or ""
+    if content_type.startswith("image/"):
+        return AttachmentKind.PHOTO
+    if content_type.startswith("video/"):
+        return AttachmentKind.VIDEO
+    return AttachmentKind.DOCUMENT
+
+
+async def _store_answer_upload(
+    upload: UploadFile,
+    settings: SettingsDependency,
+) -> QuestionAnswerAttachmentInput:
+    content = await upload.read()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Attachment file must not be empty",
+        )
+    if len(content) > MAX_ANSWER_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Attachment file is too large",
+        )
+
+    original_name = Path(upload.filename or "attachment").name
+    suffix = Path(original_name).suffix[:32]
+    upload_dir = Path(settings.feedback_upload_dir)
+    await to_thread(upload_dir.mkdir, parents=True, exist_ok=True)
+    stored_path = upload_dir / f"{uuid4().hex}{suffix}"
+    await to_thread(stored_path.write_bytes, content)
+    return QuestionAnswerAttachmentInput(
+        kind=_attachment_kind_from_upload(upload),
+        local_path=str(stored_path),
+        file_name=original_name,
+        mime_type=upload.content_type,
+        file_size=len(content),
+    )
+
+
+@router.post("/{question_id}/answer-with-attachment", response_model=TelegramQuestionResponse)
+async def answer_telegram_question_with_attachment(
+    question_id: UUID,
+    staff: CurrentStaffDependency,
+    settings: SettingsDependency,
+    questions: TelegramQuestionServiceDependency,
+    request: Request,
+    message: Annotated[str, Form()] = "",
+    attachments: Annotated[list[UploadFile] | None, File()] = None,
+) -> TelegramQuestionResponse:
+    uploads = attachments or []
+    stored_attachments = tuple(
+        [await _store_answer_upload(upload, settings) for upload in uploads]
+    )
+    try:
+        result = await questions.answer_question(
+            question_id=question_id,
+            staff_id=staff.id,
+            message=message,
+            attachments=stored_attachments,
+            viewer=_scope(staff),
+        )
+    except EmptyQuestionAnswerError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Answer message or attachment must not be empty",
+        ) from None
+    except TelegramQuestionNotFoundError:
+        raise HTTPException(status_code=404, detail="telegram-question-not-found") from None
+    except TelegramQuestionAlreadyResolvedError:
+        raise HTTPException(status_code=409, detail="telegram-question-already-resolved") from None
+
+    await _notify_student_of_answer(
+        request, settings, result.student_telegram_user_id, result.overview.answer_text or ""
+    )
     return TelegramQuestionResponse.from_domain(result.overview)
 
 
 @router.post(
-    "/{question_id}/attachment/playback",
+    "/{question_id}/attachments/{attachment_id}/playback",
     response_model=AttachmentPlaybackResponse,
 )
 async def create_telegram_question_attachment_playback(
     question_id: UUID,
+    attachment_id: UUID,
     request: Request,
     staff: CurrentStaffDependency,
     settings: SettingsDependency,
     questions: TelegramQuestionServiceDependency,
 ) -> AttachmentPlaybackResponse:
     try:
-        await questions.get_attachment_media_source(question_id=question_id)
+        await questions.get_attachment_media_source(
+            question_id=question_id, attachment_id=attachment_id
+        )
         token = create_attachment_media_token(
             staff_id=staff.id,
             submission_id=question_id,
-            attachment_id=question_id,
+            attachment_id=attachment_id,
             settings=settings,
             expires_in_seconds=PLAYBACK_TOKEN_TTL_SECONDS,
         )
@@ -152,6 +246,7 @@ async def create_telegram_question_attachment_playback(
     media_url = request.url_for(
         "stream_telegram_question_attachment",
         question_id=str(question_id),
+        attachment_id=str(attachment_id),
     )
     return AttachmentPlaybackResponse(
         url=f"{media_url.path}?token={quote(token)}",
@@ -160,12 +255,13 @@ async def create_telegram_question_attachment_playback(
 
 
 @router.get(
-    "/{question_id}/attachment/media",
+    "/{question_id}/attachments/{attachment_id}/media",
     name="stream_telegram_question_attachment",
     response_model=None,
 )
 async def stream_telegram_question_attachment(
     question_id: UUID,
+    attachment_id: UUID,
     token: str,
     request: Request,
     settings: SettingsDependency,
@@ -179,16 +275,32 @@ async def stream_telegram_question_attachment(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired media token",
         ) from None
-    if claims.submission_id != question_id or claims.attachment_id != question_id:
+    if claims.submission_id != question_id or claims.attachment_id != attachment_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Media token mismatch")
 
     try:
-        source = await questions.get_attachment_media_source(question_id=question_id)
+        source = await questions.get_attachment_media_source(
+            question_id=question_id, attachment_id=attachment_id
+        )
     except TelegramQuestionAttachmentNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Attachment not found",
         ) from None
+
+    if source.local_path is not None:
+        local_path = Path(source.local_path)
+        if await to_thread(local_path.is_file):
+            return FileResponse(
+                local_path,
+                media_type=source.mime_type or "application/octet-stream",
+                filename=source.file_name,
+                content_disposition_type="inline",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Attachment file is unavailable",
+        )
 
     if settings.telegram_bot_token is None:
         raise HTTPException(

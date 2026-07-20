@@ -343,7 +343,19 @@ export function resolveTelegramQuestion(questionId: string): Promise<TelegramQue
 export function answerTelegramQuestion(
   questionId: string,
   message: string,
+  attachments?: File[] | null,
 ): Promise<TelegramQuestion> {
+  if (attachments && attachments.length > 0) {
+    const form = new FormData();
+    form.set("message", message);
+    for (const attachment of attachments) {
+      form.append("attachments", attachment);
+    }
+    return request<TelegramQuestion>(
+      `/api/telegram-questions/${questionId}/answer-with-attachment`,
+      { method: "POST", body: form },
+    );
+  }
   return request<TelegramQuestion>(`/api/telegram-questions/${questionId}/answer`, {
     method: "POST",
     body: JSON.stringify({ message }),
@@ -352,9 +364,10 @@ export function answerTelegramQuestion(
 
 export function getTelegramQuestionAttachmentPlayback(
   questionId: string,
+  attachmentId: string,
 ): Promise<AttachmentPlayback> {
   return request<AttachmentPlayback>(
-    `/api/telegram-questions/${questionId}/attachment/playback`,
+    `/api/telegram-questions/${questionId}/attachments/${attachmentId}/playback`,
     { method: "POST" },
   );
 }

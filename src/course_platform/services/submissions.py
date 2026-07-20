@@ -24,6 +24,7 @@ from course_platform.models import (
     Submission,
     SubmissionAttachment,
     TelegramQuestion,
+    TelegramQuestionAttachment,
 )
 from course_platform.models.enums import (
     AttachmentKind,
@@ -477,19 +478,24 @@ class SubmissionService:
                 student_id=row.StudentBotState.student_id,
                 assignment_id=row.StudentBotState.assignment_id,
                 text_body=text,
-                attachment_kind=attachment.kind if attachment else None,
-                attachment_telegram_file_id=(
-                    attachment.telegram_file_id if attachment else None
-                ),
-                attachment_telegram_file_unique_id=(
-                    attachment.telegram_file_unique_id if attachment else None
-                ),
-                attachment_file_name=attachment.file_name if attachment else None,
-                attachment_mime_type=attachment.mime_type if attachment else None,
-                attachment_file_size=attachment.file_size if attachment else None,
             )
             session.add(question)
             await session.flush()
+            if attachment is not None:
+                session.add(
+                    TelegramQuestionAttachment(
+                        question_id=question.id,
+                        source="student",
+                        kind=attachment.kind,
+                        telegram_file_id=attachment.telegram_file_id,
+                        telegram_file_unique_id=attachment.telegram_file_unique_id,
+                        source_chat_id=attachment.source_chat_id,
+                        source_message_id=attachment.source_message_id,
+                        file_name=attachment.file_name,
+                        mime_type=attachment.mime_type,
+                        file_size=attachment.file_size,
+                    )
+                )
 
             row.StudentBotState.state = ConversationState.IDLE
             row.StudentBotState.assignment_id = None

@@ -215,20 +215,6 @@ class TelegramQuestion(PrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("assignments.id", ondelete="SET NULL"), index=True
     )
     text_body: Mapped[str | None] = mapped_column(Text)
-    attachment_kind: Mapped[AttachmentKind | None] = mapped_column(
-        Enum(
-            AttachmentKind,
-            name="telegram_question_attachment_kind",
-            native_enum=False,
-            length=32,
-            values_callable=enum_values,
-        )
-    )
-    attachment_telegram_file_id: Mapped[str | None] = mapped_column(String(512))
-    attachment_telegram_file_unique_id: Mapped[str | None] = mapped_column(String(255))
-    attachment_file_name: Mapped[str | None] = mapped_column(String(512))
-    attachment_mime_type: Mapped[str | None] = mapped_column(String(255))
-    attachment_file_size: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(
         String(16), default="open", server_default="open", index=True
     )
@@ -241,3 +227,34 @@ class TelegramQuestion(PrimaryKeyMixin, TimestampMixin, Base):
     student: Mapped[Student] = relationship()
     assignment: Mapped[Assignment | None] = relationship()
     resolved_by: Mapped[StaffUser | None] = relationship()
+    attachments: Mapped[list[TelegramQuestionAttachment]] = relationship(
+        back_populates="question", cascade="all, delete-orphan"
+    )
+
+
+class TelegramQuestionAttachment(PrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "telegram_question_attachments"
+
+    question_id: Mapped[UUID] = mapped_column(
+        ForeignKey("telegram_questions.id", ondelete="CASCADE"), index=True
+    )
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    kind: Mapped[AttachmentKind] = mapped_column(
+        Enum(
+            AttachmentKind,
+            name="telegram_question_attachment_kind",
+            native_enum=False,
+            length=32,
+            values_callable=enum_values,
+        )
+    )
+    telegram_file_id: Mapped[str | None] = mapped_column(String(512))
+    telegram_file_unique_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    local_path: Mapped[str | None] = mapped_column(Text)
+    source_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    source_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    file_name: Mapped[str | None] = mapped_column(String(512))
+    mime_type: Mapped[str | None] = mapped_column(String(255))
+    file_size: Mapped[int | None] = mapped_column(BigInteger)
+
+    question: Mapped[TelegramQuestion] = relationship(back_populates="attachments")

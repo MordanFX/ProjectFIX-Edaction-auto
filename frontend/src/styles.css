@@ -534,6 +534,15 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .telegram-question-answer-form__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .telegram-question-answer-form__actions button { padding: 8px 12px; color: #d7e0ea; background: #172538; border: 1px solid #30435a; border-radius: 7px; font-size: 12px; font-weight: 650; }
 .telegram-question-answer-form__actions button:last-child { color: #bcebd6; background: #194339; border-color: #286b56; }
+.telegram-question-answer-form__actions { flex-wrap: wrap; }
+.telegram-question-answer-form__attach { margin-right: auto; }
+.telegram-question-answer-form__files { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.telegram-question-answer-form__files li { display: flex; align-items: center; gap: 6px; padding: 5px 8px; color: #c4d0dd; background: #101e30; border: 1px solid #223249; border-radius: 6px; font-size: 11px; }
+.telegram-question-answer-form__files button { padding: 0; color: #8395aa; background: none; border: none; font-size: 13px; line-height: 1; cursor: pointer; }
+.telegram-question-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+.telegram-question-attachments__item button { padding: 6px 10px; color: #cce6ff; background: #172538; border: 1px solid #30435a; border-radius: 7px; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.telegram-question-attachments__item em { display: block; margin-top: 4px; color: #d98c7a; font-size: 10px; font-style: normal; }
+.telegram-question-attachments--answer .telegram-question-attachments__item button { color: #bcebd6; background: #194339; border-color: #286b56; }
 .discord-question-list__actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
 .discord-question-list__actions a, .discord-question-list__actions button { padding: 8px 10px; color: #d7e0ea; background: #172538; border: 1px solid #30435a; border-radius: 7px; font-size: 12px; font-weight: 650; text-decoration: none; white-space: nowrap; }
 .discord-question-list__actions button { color: #bcebd6; background: #194339; border-color: #286b56; }

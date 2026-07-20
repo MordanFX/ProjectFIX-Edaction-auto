@@ -224,6 +224,15 @@ export interface DiscordQuestion {
   resolved_by: string | null;
 }
 
+export interface TelegramQuestionAttachment {
+  id: string;
+  source: "student" | "curator";
+  kind: AttachmentKind;
+  file_name: string | null;
+  mime_type: string | null;
+  file_size: number | null;
+}
+
 export interface TelegramQuestion {
   question_id: string;
   student_id: string;
@@ -233,13 +242,12 @@ export interface TelegramQuestion {
   lesson_title: string | null;
   course_title: string | null;
   text_body: string | null;
-  has_attachment: boolean;
-  attachment_kind: AttachmentKind | null;
   status: "open" | "resolved";
   answer_text: string | null;
   created_at: string;
   resolved_at: string | null;
   resolved_by: string | null;
+  attachments: TelegramQuestionAttachment[];
 }
 
 export type DiscordAccessStatus =

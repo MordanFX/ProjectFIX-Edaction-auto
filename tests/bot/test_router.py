@@ -24,6 +24,7 @@ from course_platform.models import (
     Submission,
     SubmissionAttachment,
     TelegramQuestion,
+    TelegramQuestionAttachment,
 )
 from course_platform.models.enums import (
     AttachmentKind,
@@ -841,11 +842,13 @@ async def test_photo_while_awaiting_question_is_saved_as_question_not_homework(
     async with session_factory() as session:
         submission = await session.scalar(select(Submission))
         question = await session.scalar(select(TelegramQuestion))
+        attachment = await session.scalar(select(TelegramQuestionAttachment))
 
     assert submission is None
     assert question is not None
-    assert question.attachment_kind is not None
     assert question.text_body == "Photo result"
+    assert attachment is not None
+    assert attachment.source == "student"
 
     assert any(
         method == "sendMessage"
@@ -925,11 +928,19 @@ async def test_second_album_photo_after_question_is_relayed_not_counted_as_homew
         submissions_count = len((await session.scalars(select(Submission))).all())
         question = await session.scalar(select(TelegramQuestion))
         questions_count = len((await session.scalars(select(TelegramQuestion))).all())
+        attachments = (
+            await session.scalars(
+                select(TelegramQuestionAttachment).order_by(
+                    TelegramQuestionAttachment.created_at.asc()
+                )
+            )
+        ).all()
 
     assert submissions_count == 0
     assert questions_count == 1
     assert question is not None
-    assert question.attachment_telegram_file_id == "first-photo"
+    assert [a.telegram_file_id for a in attachments] == ["first-photo", "second-photo"]
+    assert all(a.source == "student" for a in attachments)
 
     assert any(
         method == "sendMessage"

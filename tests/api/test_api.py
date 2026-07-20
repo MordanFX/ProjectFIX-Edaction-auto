@@ -25,6 +25,7 @@ from course_platform.models import (
     Student,
     Submission,
     SubmissionAttachment,
+    TelegramQuestionAttachment,
 )
 from course_platform.models.enums import (
     AttachmentKind,
@@ -807,6 +808,55 @@ async def test_review_decision_can_upload_curator_attachment(
     assert {
         item["file_name"] for item in detail.json()["feedback_attachments"]
     } == {"markup.png", "plan.pdf"}
+
+
+async def test_answer_telegram_question_with_attachment_from_panel(
+    session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    await create_staff(session_factory, role=StaffRole.ADMIN)
+    await StudentService(session_factory).register(
+        StudentRegistration(telegram_user_id=222, first_name="Asker")
+    )
+    await seed_demo_data(session_factory)
+    await ProgressionService(session_factory).mark_current_viewed(222)
+    submissions = SubmissionService(session_factory)
+    async with session_factory() as session:
+        lesson = await session.scalar(select(Lesson).order_by(Lesson.position))
+    assert lesson is not None
+    await submissions.begin_question(222, expected_lesson_id=lesson.id)
+    receipt = await submissions.submit_question_text(222, "Need clarification")
+
+    settings = api_settings()
+    settings.feedback_upload_dir = str(tmp_path)
+
+    async with build_client(session_factory, settings=settings) as client:
+        token = await login(client)
+        answered = await client.post(
+            f"/api/telegram-questions/{receipt.question_id}/answer-with-attachment",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"message": "Here is the explanation"},
+            files=[("attachments", ("explain.png", b"fake-image", "image/png"))],
+        )
+        questions = await client.get(
+            "/api/telegram-questions",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    async with session_factory() as session:
+        attachment = await session.scalar(select(TelegramQuestionAttachment))
+
+    assert answered.status_code == 200
+    assert answered.json()["status"] == "resolved"
+    assert answered.json()["answer_text"] == "Here is the explanation"
+    assert attachment is not None
+    assert attachment.source == "curator"
+    assert attachment.file_name == "explain.png"
+    assert await to_thread(Path(attachment.local_path).is_file)
+    resolved_question = next(
+        item for item in questions.json() if item["question_id"] == str(receipt.question_id)
+    )
+    assert {item["file_name"] for item in resolved_question["attachments"]} == {"explain.png"}
 
 
 async def test_review_assignment_and_curator_stats(

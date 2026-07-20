@@ -23,6 +23,7 @@ from course_platform.models.submission import (
     Submission,
     SubmissionAttachment,
     TelegramQuestion,
+    TelegramQuestionAttachment,
 )
 
 __all__ = [
@@ -53,4 +54,5 @@ __all__ = [
     "Submission",
     "SubmissionAttachment",
     "TelegramQuestion",
+    "TelegramQuestionAttachment",
 ]

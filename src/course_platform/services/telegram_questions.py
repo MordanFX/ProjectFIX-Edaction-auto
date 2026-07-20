@@ -16,9 +16,11 @@ from course_platform.models import (
     StaffUser,
     Student,
     TelegramQuestion,
+    TelegramQuestionAttachment,
 )
 from course_platform.models.enums import AttachmentKind, StaffRole
 from course_platform.services.access_scope import StaffScope
+from course_platform.services.submissions import HomeworkAttachment
 
 
 class TelegramQuestionNotFoundError(RuntimeError):
@@ -50,6 +52,25 @@ class EmptyQuestionAnswerError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class QuestionAnswerAttachmentInput:
+    kind: AttachmentKind
+    local_path: str
+    file_name: str | None = None
+    mime_type: str | None = None
+    file_size: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TelegramQuestionAttachmentOverview:
+    id: UUID
+    source: str
+    kind: AttachmentKind
+    file_name: str | None
+    mime_type: str | None
+    file_size: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class TelegramQuestionOverview:
     question_id: UUID
     student_id: UUID
@@ -59,13 +80,12 @@ class TelegramQuestionOverview:
     lesson_title: str | None
     course_title: str | None
     text_body: str | None
-    has_attachment: bool
-    attachment_kind: AttachmentKind | None
     status: str
     answer_text: str | None
     created_at: datetime
     resolved_at: datetime | None
     resolved_by: str | None
+    attachments: tuple[TelegramQuestionAttachmentOverview, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,9 +135,23 @@ class RecentQuestionAttachmentTarget:
 class TelegramQuestionAttachmentSource:
     kind: AttachmentKind
     telegram_file_id: str | None
+    local_path: str | None
     file_name: str | None
     mime_type: str | None
     file_size: int | None
+
+
+def _attachment_overview(
+    attachment: TelegramQuestionAttachment,
+) -> TelegramQuestionAttachmentOverview:
+    return TelegramQuestionAttachmentOverview(
+        id=attachment.id,
+        source=attachment.source,
+        kind=attachment.kind,
+        file_name=attachment.file_name,
+        mime_type=attachment.mime_type,
+        file_size=attachment.file_size,
+    )
 
 
 class TelegramQuestionService:
@@ -149,7 +183,27 @@ class TelegramQuestionService:
                         Student.assigned_curator_id == viewer.staff_id,
                     )
                 )
-            return [self._overview(*row) for row in (await session.execute(query)).all()]
+            rows = (await session.execute(query)).all()
+
+            question_ids = [row[0].id for row in rows]
+            attachments_by_question: dict[UUID, list[TelegramQuestionAttachmentOverview]] = {
+                question_id: [] for question_id in question_ids
+            }
+            if question_ids:
+                attachment_rows = await session.scalars(
+                    select(TelegramQuestionAttachment)
+                    .where(TelegramQuestionAttachment.question_id.in_(question_ids))
+                    .order_by(TelegramQuestionAttachment.created_at.asc())
+                )
+                for attachment in attachment_rows:
+                    attachments_by_question[attachment.question_id].append(
+                        _attachment_overview(attachment)
+                    )
+
+            return [
+                self._overview(*row, attachments=attachments_by_question[row[0].id])
+                for row in rows
+            ]
 
     async def find_recent_open_question(
         self,
@@ -245,6 +299,39 @@ class TelegramQuestionService:
                 student_telegram_user_id=student_telegram_user_id,
             )
 
+    async def add_attachment(
+        self,
+        *,
+        question_id: UUID,
+        source: str,
+        kind: AttachmentKind,
+        telegram_file_id: str | None = None,
+        telegram_file_unique_id: str | None = None,
+        local_path: str | None = None,
+        source_chat_id: int | None = None,
+        source_message_id: int | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+        file_size: int | None = None,
+    ) -> None:
+        """Record a late-arriving attachment (album tail) against a question."""
+        async with session_scope(self._session_factory) as session:
+            session.add(
+                TelegramQuestionAttachment(
+                    question_id=question_id,
+                    source=source,
+                    kind=kind,
+                    telegram_file_id=telegram_file_id,
+                    telegram_file_unique_id=telegram_file_unique_id,
+                    local_path=local_path,
+                    source_chat_id=source_chat_id,
+                    source_message_id=source_message_id,
+                    file_name=file_name,
+                    mime_type=mime_type,
+                    file_size=file_size,
+                )
+            )
+
     async def resolve_question(
         self,
         *,
@@ -275,11 +362,14 @@ class TelegramQuestionService:
         question_id: UUID,
         staff_id: UUID,
         message: str,
+        attachments: tuple[QuestionAnswerAttachmentInput, ...] = (),
         viewer: StaffScope | None = None,
     ) -> QuestionPanelAnswer:
         normalized = message.strip()
-        if not normalized:
+        if not normalized and not attachments:
             raise EmptyQuestionAnswerError
+        if not normalized:
+            normalized = "См. вложение куратора."
 
         async with session_scope(self._session_factory) as session:
             row = (
@@ -304,6 +394,18 @@ class TelegramQuestionService:
             question.answer_text = normalized
             question.resolved_at = datetime.now(UTC)
             question.resolved_by_staff_id = staff_id
+            for attachment in attachments:
+                session.add(
+                    TelegramQuestionAttachment(
+                        question_id=question.id,
+                        source="curator",
+                        kind=attachment.kind,
+                        local_path=attachment.local_path,
+                        file_name=attachment.file_name,
+                        mime_type=attachment.mime_type,
+                        file_size=attachment.file_size,
+                    )
+                )
             student_telegram_user_id = student.telegram_user_id
             await session.flush()
             overview = await self._question_by_id(session, question.id)
@@ -316,17 +418,24 @@ class TelegramQuestionService:
         self,
         *,
         question_id: UUID,
+        attachment_id: UUID,
     ) -> TelegramQuestionAttachmentSource:
         async with self._session_factory() as session:
-            question = await session.get(TelegramQuestion, question_id)
-            if question is None or question.attachment_kind is None:
+            attachment = await session.scalar(
+                select(TelegramQuestionAttachment).where(
+                    TelegramQuestionAttachment.id == attachment_id,
+                    TelegramQuestionAttachment.question_id == question_id,
+                )
+            )
+            if attachment is None:
                 raise TelegramQuestionAttachmentNotFoundError
             return TelegramQuestionAttachmentSource(
-                kind=question.attachment_kind,
-                telegram_file_id=question.attachment_telegram_file_id,
-                file_name=question.attachment_file_name,
-                mime_type=question.attachment_mime_type,
-                file_size=question.attachment_file_size,
+                kind=attachment.kind,
+                telegram_file_id=attachment.telegram_file_id,
+                local_path=attachment.local_path,
+                file_name=attachment.file_name,
+                mime_type=attachment.mime_type,
+                file_size=attachment.file_size,
             )
 
     async def begin_reply(
@@ -412,14 +521,14 @@ class TelegramQuestionService:
         *,
         reviewer_telegram_user_id: int,
         message: str,
-        has_attachment: bool = False,
+        attachment: HomeworkAttachment | None = None,
     ) -> QuestionReplyCompletion:
         pending = await self.get_pending_reply(reviewer_telegram_user_id)
         if pending is None:
             raise NoPendingQuestionReplyError
 
         normalized = message.strip()
-        if not normalized and not has_attachment:
+        if not normalized and attachment is None:
             raise EmptyQuestionReplyError
         if not normalized:
             normalized = "См. вложение куратора."
@@ -445,6 +554,21 @@ class TelegramQuestionService:
             question.answer_text = normalized
             question.resolved_at = datetime.now(UTC)
             question.resolved_by_staff_id = pending.reviewer_id
+            if attachment is not None:
+                session.add(
+                    TelegramQuestionAttachment(
+                        question_id=question.id,
+                        source="curator",
+                        kind=attachment.kind,
+                        telegram_file_id=attachment.telegram_file_id,
+                        telegram_file_unique_id=attachment.telegram_file_unique_id,
+                        source_chat_id=attachment.source_chat_id,
+                        source_message_id=attachment.source_message_id,
+                        file_name=attachment.file_name,
+                        mime_type=attachment.mime_type,
+                        file_size=attachment.file_size,
+                    )
+                )
             if state is not None:
                 await session.delete(state)
 
@@ -476,7 +600,13 @@ class TelegramQuestionService:
                 .where(TelegramQuestion.id == question_id)
             )
         ).one()
-        return self._overview(*row)
+        attachment_rows = await session.scalars(
+            select(TelegramQuestionAttachment)
+            .where(TelegramQuestionAttachment.question_id == question_id)
+            .order_by(TelegramQuestionAttachment.created_at.asc())
+        )
+        attachments = [_attachment_overview(attachment) for attachment in attachment_rows]
+        return self._overview(*row, attachments=attachments)
 
     @staticmethod
     def _overview(
@@ -485,6 +615,8 @@ class TelegramQuestionService:
         lesson: Lesson | None,
         course: Course | None,
         staff: StaffUser | None,
+        *,
+        attachments: list[TelegramQuestionAttachmentOverview] | None = None,
     ) -> TelegramQuestionOverview:
         student_name = " ".join(
             part for part in (student.first_name, student.last_name) if part
@@ -498,11 +630,10 @@ class TelegramQuestionService:
             lesson_title=lesson.title if lesson else None,
             course_title=course.title if course else None,
             text_body=question.text_body,
-            has_attachment=question.attachment_kind is not None,
-            attachment_kind=question.attachment_kind,
             status=question.status,
             answer_text=question.answer_text,
             created_at=question.created_at,
             resolved_at=question.resolved_at,
             resolved_by=staff.display_name if staff else None,
+            attachments=tuple(attachments or ()),
         )

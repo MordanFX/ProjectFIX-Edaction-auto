@@ -15,6 +15,7 @@ from course_platform.models import (
     Submission,
     SubmissionAttachment,
     TelegramQuestion,
+    TelegramQuestionAttachment,
 )
 from course_platform.models.enums import (
     AttachmentKind,
@@ -37,6 +38,7 @@ from course_platform.services.telegram_questions import (
     EmptyQuestionAnswerError,
     EmptyQuestionReplyError,
     NoPendingQuestionReplyError,
+    QuestionAnswerAttachmentInput,
     TelegramQuestionAlreadyResolvedError,
     TelegramQuestionService,
     UnauthorizedQuestionReviewerError,
@@ -264,11 +266,14 @@ async def test_question_attachment_is_saved_instead_of_homework(
     async with session_factory() as session:
         submission = await session.scalar(select(Submission))
         question = await session.scalar(select(TelegramQuestion))
+        attachment = await session.scalar(select(TelegramQuestionAttachment))
     assert submission is None
     assert question is not None
-    assert question.attachment_kind is AttachmentKind.PHOTO
-    assert question.attachment_telegram_file_id == "question-photo"
     assert question.text_body == "Look at this screenshot"
+    assert attachment is not None
+    assert attachment.source == "student"
+    assert attachment.kind is AttachmentKind.PHOTO
+    assert attachment.telegram_file_id == "question-photo"
 
 
 async def test_telegram_question_is_listed_and_resolved(
@@ -374,6 +379,85 @@ async def test_curator_can_reply_to_telegram_question(
 
     with pytest.raises(NoPendingQuestionReplyError):
         await questions_service.complete_reply(reviewer_telegram_user_id=999, message="Late reply")
+
+
+async def test_curator_reply_attachment_is_saved_for_history(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    submission_service = await prepare_student(session_factory)
+    receipt = await ask_question(session_factory, submission_service)
+
+    async with session_factory() as session:
+        staff = StaffUser(login="curator-photo", display_name="Curator", telegram_user_id=998)
+        session.add(staff)
+        await session.commit()
+
+    questions_service = TelegramQuestionService(session_factory)
+    await questions_service.begin_reply(
+        question_id=receipt.question_id,
+        reviewer_telegram_user_id=998,
+    )
+    await questions_service.complete_reply(
+        reviewer_telegram_user_id=998,
+        message="See the attached screenshot",
+        attachment=HomeworkAttachment(
+            kind=AttachmentKind.PHOTO,
+            telegram_file_id="answer-photo",
+            telegram_file_unique_id="answer-photo-unique",
+            source_chat_id=998,
+            source_message_id=42,
+        ),
+    )
+
+    async with session_factory() as session:
+        attachment = await session.scalar(
+            select(TelegramQuestionAttachment).where(
+                TelegramQuestionAttachment.question_id == receipt.question_id
+            )
+        )
+    assert attachment is not None
+    assert attachment.source == "curator"
+    assert attachment.telegram_file_id == "answer-photo"
+
+
+async def test_panel_answer_attachment_is_saved_for_history(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    submission_service = await prepare_student(session_factory)
+    receipt = await ask_question(session_factory, submission_service)
+
+    async with session_factory() as session:
+        staff = StaffUser(login="panel-curator-2", display_name="Panel Curator")
+        session.add(staff)
+        await session.commit()
+        staff_id = staff.id
+
+    questions_service = TelegramQuestionService(session_factory)
+    result = await questions_service.answer_question(
+        question_id=receipt.question_id,
+        staff_id=staff_id,
+        message="See the attached file",
+        attachments=(
+            QuestionAnswerAttachmentInput(
+                kind=AttachmentKind.DOCUMENT,
+                local_path="data/feedback_uploads/answer-file.pdf",
+                file_name="answer-file.pdf",
+                mime_type="application/pdf",
+                file_size=2048,
+            ),
+        ),
+    )
+    assert result.overview.answer_text == "See the attached file"
+
+    async with session_factory() as session:
+        attachment = await session.scalar(
+            select(TelegramQuestionAttachment).where(
+                TelegramQuestionAttachment.question_id == receipt.question_id
+            )
+        )
+    assert attachment is not None
+    assert attachment.source == "curator"
+    assert attachment.local_path == "data/feedback_uploads/answer-file.pdf"
 
 
 async def test_cannot_reply_to_already_resolved_question(

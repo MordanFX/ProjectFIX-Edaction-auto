@@ -1073,14 +1073,14 @@ class MessageRouter:
         self,
         reviewer_telegram_user_id: int,
         message_text: str,
-        attachment_source: tuple[int, int] | None,
+        attachment: HomeworkAttachment | None,
     ) -> str:
         assert self._questions is not None
         try:
             completion = await self._questions.complete_reply(
                 reviewer_telegram_user_id=reviewer_telegram_user_id,
                 message=message_text,
-                has_attachment=attachment_source is not None,
+                attachment=attachment,
             )
         except EmptyQuestionReplyError:
             return "⚠️ Ответ пустой. Напиши текст или отправь фото/файл с пояснением."
@@ -1102,12 +1102,15 @@ class MessageRouter:
                     f"{escape(completion.message)}",
                     parse_mode="HTML",
                 )
-                if attachment_source is not None:
-                    source_chat_id, source_message_id = attachment_source
+                if (
+                    attachment is not None
+                    and attachment.source_chat_id is not None
+                    and attachment.source_message_id is not None
+                ):
                     await self._api.copy_message(
                         completion.student_telegram_user_id,
-                        source_chat_id,
-                        source_message_id,
+                        attachment.source_chat_id,
+                        attachment.source_message_id,
                     )
             except (TelegramAPIError, TelegramTransportError):
                 pass
@@ -1129,14 +1132,12 @@ class MessageRouter:
             or message.video is not None
             or message.video_note is not None
         )
-        attachment_source = (
-            (message.chat.id, message.message_id) if has_attachment else None
-        )
+        attachment = self._homework_attachment_from_message(message) if has_attachment else None
         reply_text = (message.text or message.caption or "").strip()
         return await self._complete_question_reply(
             reviewer_telegram_user_id,
             reply_text,
-            attachment_source,
+            attachment,
         )
 
     @staticmethod
@@ -2842,6 +2843,20 @@ class MessageRouter:
         target: RecentQuestionAttachmentTarget,
     ) -> str:
         """A late album photo/file that arrived right after a question was created."""
+        assert self._questions is not None
+        attachment = self._homework_attachment_from_message(message)
+        await self._questions.add_attachment(
+            question_id=target.question_id,
+            source="student",
+            kind=attachment.kind,
+            telegram_file_id=attachment.telegram_file_id,
+            telegram_file_unique_id=attachment.telegram_file_unique_id,
+            source_chat_id=attachment.source_chat_id,
+            source_message_id=attachment.source_message_id,
+            file_name=attachment.file_name,
+            mime_type=attachment.mime_type,
+            file_size=attachment.file_size,
+        )
         for curator_id in target.curator_telegram_user_ids:
             try:
                 await self._api.copy_message(curator_id, message.chat.id, message.message_id)
@@ -2858,6 +2873,20 @@ class MessageRouter:
         target: RecentAnsweredQuestionTarget,
     ) -> str:
         """A late album photo/file from a curator who just answered a question."""
+        assert self._questions is not None
+        attachment = self._homework_attachment_from_message(message)
+        await self._questions.add_attachment(
+            question_id=target.question_id,
+            source="curator",
+            kind=attachment.kind,
+            telegram_file_id=attachment.telegram_file_id,
+            telegram_file_unique_id=attachment.telegram_file_unique_id,
+            source_chat_id=attachment.source_chat_id,
+            source_message_id=attachment.source_message_id,
+            file_name=attachment.file_name,
+            mime_type=attachment.mime_type,
+            file_size=attachment.file_size,
+        )
         if target.student_telegram_user_id is not None:
             try:
                 await self._api.copy_message(

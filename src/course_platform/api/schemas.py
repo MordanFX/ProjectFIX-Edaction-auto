@@ -364,6 +364,15 @@ class DiscordQuestionResponse(APIModel):
         return cls(**payload)
 
 
+class TelegramQuestionAttachmentResponse(APIModel):
+    id: UUID
+    source: str
+    kind: AttachmentKind
+    file_name: str | None
+    mime_type: str | None
+    file_size: int | None
+
+
 class TelegramQuestionResponse(APIModel):
     question_id: UUID
     student_id: UUID
@@ -373,13 +382,12 @@ class TelegramQuestionResponse(APIModel):
     lesson_title: str | None
     course_title: str | None
     text_body: str | None
-    has_attachment: bool
-    attachment_kind: AttachmentKind | None
     status: str
     answer_text: str | None
     created_at: datetime
     resolved_at: datetime | None
     resolved_by: str | None
+    attachments: list[TelegramQuestionAttachmentResponse] = []
 
     @classmethod
     def from_domain(cls, item: TelegramQuestionOverview) -> "TelegramQuestionResponse":
