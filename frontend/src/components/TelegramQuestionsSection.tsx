@@ -106,6 +106,26 @@ function QuestionRow({ question, onResolve, onAnswer }: {
   const studentAttachments = question.attachments.filter((item) => item.source === "student");
   const curatorAttachments = question.attachments.filter((item) => item.source === "curator");
 
+  useEffect(() => {
+    if (!answering) return;
+    function handlePaste(event: ClipboardEvent) {
+      const pasted = Array.from(event.clipboardData?.files ?? []).find((candidate) =>
+        candidate.type.startsWith("image/"),
+      );
+      if (!pasted) return;
+      event.preventDefault();
+      const extension = pasted.type.split("/")[1] ?? "png";
+      const named = new File(
+        [pasted],
+        `Скриншот ${new Date().toLocaleString("ru-RU")}.${extension}`,
+        { type: pasted.type },
+      );
+      setAnswerFiles((current) => [...current, named]);
+    }
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  }, [answering]);
+
   async function submitAnswer() {
     if (!answerText.trim() && answerFiles.length === 0) return;
     setAnswerSaving(true);
