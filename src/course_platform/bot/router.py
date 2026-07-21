@@ -1115,10 +1115,18 @@ class MessageRouter:
             except (TelegramAPIError, TelegramTransportError):
                 pass
 
+        lesson_reference = (
+            f" (урок {completion.lesson_position}: {escape(completion.lesson_title)})"
+            if completion.lesson_title
+            else ""
+        )
         return (
             "✅ <b>ОТВЕТ ОТПРАВЛЕН</b>\n\n"
-            f"Ученик {escape(completion.student_name)} получит его в Telegram. "
-            "Вопрос закрыт."
+            f"Ученик {escape(completion.student_name)}{lesson_reference} получит его "
+            "в Telegram. Вопрос закрыт.\n\n"
+            "Проверь, что это тот вопрос, который ты имел в виду — если у ученика "
+            "несколько открытых вопросов, ответ уходит на последний, на который "
+            "ты нажимал «Ответить»."
         )
 
     async def _complete_question_reply_from_message(
@@ -2676,10 +2684,19 @@ class MessageRouter:
             and question.attachment_source_message_id is not None
         )
         for curator_id in question.curator_telegram_user_ids:
+            curator_text = text
+            if self._questions is not None and await self._questions.has_pending_reply(
+                curator_id
+            ):
+                curator_text = (
+                    "⚠️ <b>У тебя есть неотвеченный вопрос!</b>\n"
+                    "Сначала ответь на него или отмени: /cancel_review — иначе "
+                    "следующий ответ уйдёт не тому ученику.\n\n"
+                ) + curator_text
             try:
                 await self._api.send_message(
                     curator_id,
-                    text,
+                    curator_text,
                     parse_mode="HTML",
                     reply_markup={
                         "inline_keyboard": [

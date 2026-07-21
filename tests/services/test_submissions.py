@@ -1,5 +1,7 @@
 """Persistent text homework workflow tests."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -480,6 +482,47 @@ async def test_cannot_reply_to_already_resolved_question(
             question_id=receipt.question_id,
             reviewer_telegram_user_id=888,
         )
+
+
+async def test_stale_pending_reply_expires_instead_of_silently_resolving(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A curator who pressed "Ответить" long ago and forgot must not have a
+    much later, unrelated message silently resolve that stale question."""
+    submission_service = await prepare_student(session_factory)
+    receipt = await ask_question(session_factory, submission_service)
+
+    async with session_factory() as session:
+        staff = StaffUser(login="curator-stale", display_name="Stale Curator", telegram_user_id=997)
+        session.add(staff)
+        await session.commit()
+        staff_id = staff.id
+
+    questions_service = TelegramQuestionService(session_factory)
+    await questions_service.begin_reply(
+        question_id=receipt.question_id,
+        reviewer_telegram_user_id=997,
+    )
+    assert await questions_service.has_pending_reply(997) is True
+
+    async with session_factory() as session:
+        state = await session.get(StaffBotState, staff_id)
+        assert state is not None
+        state.updated_at = datetime.now(UTC) - timedelta(hours=1)
+        await session.commit()
+
+    assert await questions_service.get_pending_reply(997) is None
+    assert await questions_service.has_pending_reply(997) is False
+
+    with pytest.raises(NoPendingQuestionReplyError):
+        await questions_service.complete_reply(
+            reviewer_telegram_user_id=997, message="Too late now"
+        )
+
+    async with session_factory() as session:
+        question = await session.get(TelegramQuestion, receipt.question_id)
+    assert question is not None
+    assert question.status == "open"
 
 
 async def test_question_notifies_only_the_assigned_curator(

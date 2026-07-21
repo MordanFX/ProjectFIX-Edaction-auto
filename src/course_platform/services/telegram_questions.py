@@ -498,8 +498,19 @@ class TelegramQuestionService:
     async def get_pending_reply(
         self,
         reviewer_telegram_user_id: int,
+        *,
+        within_seconds: int = 1800,
     ) -> PendingQuestionReply | None:
+        """Return the question this curator pressed "Ответить" for, if still fresh.
+
+        The reply target is a single slot per curator, not tied to a specific
+        chat message. If a curator presses "Ответить" on one question and
+        then forgets about it, a much later unrelated message must not
+        silently resolve that stale question — so a pending reply older than
+        within_seconds is treated as if it were never set.
+        """
         async with self._session_factory() as session:
+            cutoff = datetime.now(UTC) - timedelta(seconds=within_seconds)
             row = (
                 await session.execute(
                     select(StaffBotState, StaffUser)
@@ -508,6 +519,7 @@ class TelegramQuestionService:
                         StaffUser.telegram_user_id == reviewer_telegram_user_id,
                         StaffUser.is_active.is_(True),
                         StaffBotState.question_id.is_not(None),
+                        StaffBotState.updated_at >= cutoff,
                     )
                 )
             ).one_or_none()
@@ -515,6 +527,9 @@ class TelegramQuestionService:
                 return None
             state, reviewer = row
             return PendingQuestionReply(question_id=state.question_id, reviewer_id=reviewer.id)
+
+    async def has_pending_reply(self, reviewer_telegram_user_id: int) -> bool:
+        return await self.get_pending_reply(reviewer_telegram_user_id) is not None
 
     async def complete_reply(
         self,
