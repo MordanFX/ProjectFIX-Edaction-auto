@@ -82,6 +82,7 @@ async def _notify_student_of_answer(
     settings: SettingsDependency,
     student_telegram_user_id: int | None,
     message: str,
+    attachments: tuple[QuestionAnswerAttachmentInput, ...] = (),
 ) -> None:
     if student_telegram_user_id is None or settings.telegram_bot_token is None:
         return
@@ -96,7 +97,21 @@ async def _notify_student_of_answer(
             f"💬 <b>ОТВЕТ КУРАТОРА</b>\n\n{escape(message.strip())}",
             parse_mode="HTML",
         )
-    except (TelegramAPIError, TelegramTransportError):
+        for attachment in attachments:
+            local_path = Path(attachment.local_path)
+            if attachment.kind is AttachmentKind.PHOTO:
+                await telegram.send_photo_file(
+                    student_telegram_user_id,
+                    local_path,
+                    mime_type=attachment.mime_type or "image/jpeg",
+                )
+            else:
+                await telegram.send_document_file(
+                    student_telegram_user_id,
+                    local_path,
+                    mime_type=attachment.mime_type or "application/octet-stream",
+                )
+    except (TelegramAPIError, TelegramTransportError, OSError):
         pass
     finally:
         await telegram.close()
@@ -207,7 +222,11 @@ async def answer_telegram_question_with_attachment(
         raise HTTPException(status_code=409, detail="telegram-question-already-resolved") from None
 
     await _notify_student_of_answer(
-        request, settings, result.student_telegram_user_id, result.overview.answer_text or ""
+        request,
+        settings,
+        result.student_telegram_user_id,
+        result.overview.answer_text or "",
+        attachments=stored_attachments,
     )
     return TelegramQuestionResponse.from_domain(result.overview)
 

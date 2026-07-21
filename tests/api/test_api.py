@@ -830,7 +830,27 @@ async def test_answer_telegram_question_with_attachment_from_panel(
     settings = api_settings()
     settings.feedback_upload_dir = str(tmp_path)
 
-    async with build_client(session_factory, settings=settings) as client:
+    telegram_calls: list[str] = []
+
+    async def telegram_handler(request: httpx.Request) -> httpx.Response:
+        telegram_calls.append(request.url.path.rsplit("/", maxsplit=1)[-1])
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "message_id": len(telegram_calls),
+                    "date": 1_700_000_000,
+                    "chat": {"id": 222, "type": "private"},
+                    "text": "ok",
+                },
+            },
+        )
+
+    transport = httpx.MockTransport(telegram_handler)
+    async with build_client(
+        session_factory, settings=settings, telegram_transport=transport
+    ) as client:
         token = await login(client)
         answered = await client.post(
             f"/api/telegram-questions/{receipt.question_id}/answer-with-attachment",
@@ -857,6 +877,7 @@ async def test_answer_telegram_question_with_attachment_from_panel(
         item for item in questions.json() if item["question_id"] == str(receipt.question_id)
     )
     assert {item["file_name"] for item in resolved_question["attachments"]} == {"explain.png"}
+    assert telegram_calls == ["sendMessage", "sendPhoto"]
 
 
 async def test_review_assignment_and_curator_stats(
